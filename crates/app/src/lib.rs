@@ -31,6 +31,8 @@ pub struct App {
     keys: [bool; 6],
     last: Instant,
     start: Instant,
+    /// MEZDU_TIME=<seconds> freezes the animation clock (comparable screenshots on the desktop)
+    frozen: Option<f32>,
     sky: [f64; 3],
     frames: u32,
     fps_t: Instant,
@@ -61,6 +63,7 @@ impl App {
             keys: [false; 6],
             last: Instant::now(),
             start: Instant::now(),
+            frozen: std::env::var("MEZDU_TIME").ok().and_then(|v| v.parse().ok()),
             sky: SKY_VULKAN,
             frames: 0, fps_t: Instant::now(), fps: 0.0 }
     }
@@ -157,7 +160,7 @@ impl ApplicationHandler for App {
                 }
                 let Some(g) = &mut self.gfx else { return };
                 match &mut self.world {
-                    Some(w) => g.frame_world(w, &self.cam, self.start.elapsed().as_secs_f32()),
+                    Some(w) => g.frame_world(w, &self.cam, self.frozen.unwrap_or_else(|| self.start.elapsed().as_secs_f32())),
                     None => g.frame(self.sky),
                 }
                 self.frames += 1;

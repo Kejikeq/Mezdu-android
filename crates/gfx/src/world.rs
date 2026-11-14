@@ -76,6 +76,9 @@ pub struct World {
     pub calls: u32,
     pub shadow_passes: u32,
     prev_vp: [f32; 16],
+    prev_cam: glam::Vec3,
+    /// last frame's TAA history is usable (F.taa.w)
+    hist_valid: bool,
 }
 
 /// everything bind group 0 (renderer.js L0) holds, so the main one can be rebuilt with screen-sized AO / SSR textures
@@ -123,8 +126,9 @@ struct Targets {
     hdr: wgpu::TextureView,
     gbuf: wgpu::TextureView,
     depth: wgpu::TextureView,
-    hist: wgpu::TextureView,
-    comp_bg: wgpu::BindGroup,
+    /// TAA history, written and read alternately (renderer.js histViews / bgCompH)
+    hist: [wgpu::TextureView; 2],
+    comp_bg: [wgpu::BindGroup; 2],
     ao: wgpu::TextureView,
     ssr: wgpu::TextureView,
     ao_bg: wgpu::BindGroup,
@@ -482,6 +486,8 @@ impl World {
             calls: 0,
             shadow_passes: 0,
             prev_vp: glam::Mat4::IDENTITY.to_cols_array(),
+            prev_cam: glam::Vec3::ZERO,
+            hist_valid: false,
         })
     }
 
@@ -491,17 +497,20 @@ impl World {
         }
         let u = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
         let mk = |label: &str, f: wgpu::TextureFormat| tex(d, label, ext(w, h, 1), wgpu::TextureDimension::D2, f, 1, u).create_view(&Default::default());
-        let (hdr, gbuf, depth, hist) = (mk("scene", HDR), mk("gbuf", GBUF), mk("depth", DEPTH), mk("hist", HDR));
-        let hist_in = mk("hist in", HDR); // TAA is off: last frame's history is never read (F.taa.w = 0)
+        let (hdr, gbuf, depth) = (mk("scene", HDR), mk("gbuf", GBUF), mk("depth", DEPTH));
+        let hist = [mk("hist 0", HDR), mk("hist 1", HDR)];
         let r = &self.comp_res;
-        let comp_bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bg_comp"),
-            layout: &self.p_comp.get_bind_group_layout(0),
-            entries: &[
-                be(0, buf(&self.frame_buf)), be(1, tv(&hdr)), be(2, tv(&r.vol)), be(3, tv(&depth)), be(4, wgpu::BindingResource::Sampler(&r.lin_smp)),
-                be(7, tv(&r.dof)), be(8, tv(&hist_in)), be(9, tv(&gbuf)), be(10, tv(&r.lut)),
-            ],
+        let comp_bg = [1, 0].map(|read: usize| {
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bg_comp"),
+                layout: &self.p_comp.get_bind_group_layout(0),
+                entries: &[
+                    be(0, buf(&self.frame_buf)), be(1, tv(&hdr)), be(2, tv(&r.vol)), be(3, tv(&depth)), be(4, wgpu::BindingResource::Sampler(&r.lin_smp)),
+                    be(7, tv(&r.dof)), be(8, tv(&hist[read])), be(9, tv(&gbuf)), be(10, tv(&r.lut)),
+                ],
+            })
         });
+        self.hist_valid = false;
         let half = |label: &str, k: u32, f: wgpu::TextureFormat| tex(d, label, ext((w >> k).max(1), (h >> k).max(1), 1), wgpu::TextureDimension::D2, f, 1, u).create_view(&Default::default());
         let (ao, ssr) = (half("ao", 1, wgpu::TextureFormat::Rgba8Unorm), half("ssr", 2, HDR));
         let ao_bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -559,7 +568,23 @@ impl World {
         let aspect = w as f32 / h.max(1) as f32;
         let proj = perspective(cam.fov_y, aspect, 0.08, 400.0);
         let view = look_to(cam.pos, cam.forward(), glam::Vec3::Y);
-        let vp = proj * view;
+        let vp_nj = proj * view;
+        // TAA (renderer.js setupCamera): a camera cut leaves nothing worth keeping; otherwise the projection is
+        // shifted by a Halton offset and fsComp un-jitters with fx2.zw
+        if cam.pos.distance(self.prev_cam) > 3.0 {
+            self.hist_valid = false;
+            self.ss_valid = false;
+        }
+        self.prev_cam = cam.pos;
+        let (mut jx, mut jy) = (0.0, 0.0);
+        let mut pj = proj;
+        if self.hist_valid {
+            let k = (self.frame_no & 7) as usize + 1;
+            (jx, jy) = (halton(k, 2) - 0.5, halton(k, 3) - 0.5);
+            pj.z_axis.x += jx * 2.0 / w as f32;
+            pj.z_axis.y += jy * 2.0 / h as f32;
+        }
+        let vp = pj * view;
 
         // cascades follow a point a little ahead of the camera, as they follow the hero in the game
         let fwd = glam::Vec3::new(cam.yaw.sin(), 0.0, -cam.yaw.cos());
@@ -569,9 +594,14 @@ impl World {
         let pf = self.pf;
         let f = &mut self.frame;
         f[pf.view_proj..pf.view_proj + 16].copy_from_slice(&vp.to_cols_array());
-        f[pf.inv_view_proj..pf.inv_view_proj + 16].copy_from_slice(&vp.inverse().to_cols_array());
+        // invViewProj stays in the unjittered space of prevVP: reprojection without oscillation
+        f[pf.inv_view_proj..pf.inv_view_proj + 16].copy_from_slice(&vp_nj.inverse().to_cols_array());
         f[pf.prev_vp..pf.prev_vp + 16].copy_from_slice(&self.prev_vp);
-        self.prev_vp = vp.to_cols_array();
+        self.prev_vp = vp_nj.to_cols_array();
+        f[263] = if self.hist_valid { 1.0 } else { 0.0 }; // taa.w
+        f[398] = jx / w as f32; // fx2.zw: un-jitter (sign as renderer.js)
+        f[399] = -jy / h as f32;
+        f[411] = (self.frame_no & 15) as f32; // opt.w: temporal noise phase
         let right = view.row(0);
         let up = view.row(1);
         f[pf.cam..pf.cam + 3].copy_from_slice(&cam.pos.to_array());
@@ -596,7 +626,7 @@ impl World {
         }
 
         if let Some(pr) = &mut self.props {
-            pr.cull(q, cam.pos.to_array(), &frustum_planes(&vp));
+            pr.cull(q, cam.pos.to_array(), &frustum_planes(&vp_nj));
             for (k, &again) in redo.iter().enumerate() {
                 if again {
                     let cs = &self.casc[k];
@@ -738,18 +768,30 @@ impl World {
             p.draw(0..3, 0..1);
         }
         self.ss_valid = true;
+        let hk = (self.frame_no & 1) as usize;
+        self.hist_valid = true;
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("comp"),
             color_attachments: &[
                 Some(wgpu::RenderPassColorAttachment { view: out, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } }),
-                Some(wgpu::RenderPassColorAttachment { view: &t.hist, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard } }),
+                Some(wgpu::RenderPassColorAttachment { view: &t.hist[hk], resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } }),
             ],
             ..Default::default()
         });
         p.set_pipeline(&self.p_comp);
-        p.set_bind_group(0, &t.comp_bg, &[]);
+        p.set_bind_group(0, &t.comp_bg[hk], &[]);
         p.draw(0..3, 0..1);
     }
+}
+
+fn halton(mut i: usize, b: usize) -> f32 {
+    let (mut f, mut r) = (1.0, 0.0);
+    while i > 0 {
+        f /= b as f32;
+        r += f * (i % b) as f32;
+        i /= b;
+    }
+    r
 }
 
 /// engine/math.js ortho: depth 0..1
