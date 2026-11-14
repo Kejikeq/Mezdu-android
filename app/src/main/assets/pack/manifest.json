@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "5486b932345e53ac8c150cac0b8945af5089460a",
- "created": "2026-11-14T19:25:40.093Z",
+ "commit": "af87d128332aca5b5d02d44988d7d9a0b2d873b7",
+ "created": "2026-11-14T22:47:25.200Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -272,6 +272,54 @@
    "kind": "materials"
   },
   {
+   "path": "world/0_8.bin.zst",
+   "sha256": "8c2a8f51c708d597b740977177ec9aa3173db15aba094afe76dc402c5d9d5389",
+   "size": 95666,
+   "kind": "world",
+   "tx": 0,
+   "tz": 8
+  },
+  {
+   "path": "world/1_8.bin.zst",
+   "sha256": "4684edbae732abe8bc857b8f083b4131b35ac85efb9b58f99d1577d1fa40635d",
+   "size": 45953,
+   "kind": "world",
+   "tx": 1,
+   "tz": 8
+  },
+  {
+   "path": "world/2_8.bin.zst",
+   "sha256": "02b5e65e5e0d6fbeedfb5c0af0bb553579a2d565f23bcbd6bad2b47f36957227",
+   "size": 43889,
+   "kind": "world",
+   "tx": 2,
+   "tz": 8
+  },
+  {
+   "path": "world/0_9.bin.zst",
+   "sha256": "cf181ec7034f00d6c3d3ac138e97f6893eaa0b95a24a140e4271c06d0b7b754f",
+   "size": 102069,
+   "kind": "world",
+   "tx": 0,
+   "tz": 9
+  },
+  {
+   "path": "world/1_9.bin.zst",
+   "sha256": "778eac904fbdfcf2ca8b13ba6d9dc93338072c718b77c0a0269dd4c7e300d49d",
+   "size": 79674,
+   "kind": "world",
+   "tx": 1,
+   "tz": 9
+  },
+  {
+   "path": "world/2_9.bin.zst",
+   "sha256": "8eb636cf16cd8f25dbb58bd0ad1e7efa53876080328ecd14bb6d848150e87a9f",
+   "size": 70826,
+   "kind": "world",
+   "tx": 2,
+   "tz": 9
+  },
+  {
    "path": "mesh/0_8.bin.zst",
    "sha256": "926b54ca5447dff258c432d6380ad2e9b148a74102312a461af0a769efc6c69b",
    "size": 132750,
@@ -321,20 +369,20 @@
   },
   {
    "path": "models/faces.bin.zst",
-   "sha256": "3908d6d8cc21d9e98675ef7387598e246af99e443384f72ad5bc7beff032f907",
-   "size": 2565334,
+   "sha256": "a1114596de6fd69d60c7e04255f2622dcf14f4b125ba954609b90f9016844869",
+   "size": 2575017,
    "kind": "models"
   },
   {
    "path": "models/models.json",
-   "sha256": "2fbcea2542189d65afc75a68006a827751a4a77d7544ae1f426622b4cf1e8f63",
-   "size": 60888,
+   "sha256": "f6e32a71f1eecdcb0e4f05e32b3ecd64bd03bc6aa27905feee0f66c1fd85c47a",
+   "size": 61975,
    "kind": "models"
   },
   {
    "path": "models/instances.bin.zst",
-   "sha256": "a7bfb773cf2ad0262f9c4e0d3b406464f467742165b9729df5831b0da64003e7",
-   "size": 62832,
+   "sha256": "4a9975ed9d5cbbed471e16400764a9d51283ced6ebaa6c03165da5e0491d4916",
+   "size": 62834,
    "kind": "models",
    "count": 4550
   },

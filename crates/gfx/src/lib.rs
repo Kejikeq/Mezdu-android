@@ -146,11 +146,11 @@ impl Gfx {
     }
 
     /// Scene frame: the world through the game's shaders, then present.
-    pub fn frame_world(&mut self, world: &mut world::World, cam: &world::Camera, time: f32) {
+    pub fn frame_world(&mut self, world: &mut world::World, cam: &world::Camera, focus: glam::Vec3, time: f32) {
         let Some(tex) = self.acquire() else { return };
         let view = tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        world.render(&self.device, &self.queue, &mut enc, &view, self.config.width, self.config.height, cam, time);
+        world.render(&self.device, &self.queue, &mut enc, &view, self.config.width, self.config.height, cam, focus, time);
         self.queue.submit([enc.finish()]);
         self.queue.present(tex);
     }

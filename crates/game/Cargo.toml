@@ -1,0 +1,8 @@
+[package]
+name = "mezdu-game"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mezdu-core.workspace = true
+serde_json.workspace = true

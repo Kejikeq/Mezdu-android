@@ -637,8 +637,21 @@ impl World {
     }
 
     /// Writes the frame uniforms and records shadow, main and final passes.
+    /// names of the pack's models (index = model index of an instance)
+    pub fn model_names(&self) -> Vec<&str> {
+        self.props.as_ref().map_or_else(Vec::new, |p| p.meta.iter().map(|m| m.name.as_str()).collect())
+    }
+
+    /// instances the game moves every frame (the hero's rig), see Props::set_dynamic
+    pub fn set_dynamic(&mut self, q: &wgpu::Queue, words: &[u32]) {
+        if let Some(p) = &mut self.props {
+            p.set_dynamic(q, words);
+        }
+    }
+
+    /// `focus`: the hero (shadow cascades, grass bending, F.player)
     #[allow(clippy::too_many_arguments)]
-    pub fn render(&mut self, d: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView, sw: u32, sh: u32, cam: &Camera, time: f32) {
+    pub fn render(&mut self, d: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView, sw: u32, sh: u32, cam: &Camera, focus: glam::Vec3, time: f32) {
         // the scene and the final pass at no more than quality.px megapixels (QUALITY.px with outPx in the game)
         let k = (self.quality.px * 1e6 / (sw.max(1) * sh.max(1)) as f32).sqrt().min(1.0);
         let (w, h) = (((sw as f32 * k) as u32).max(1), ((sh as f32 * k) as u32).max(1));
@@ -664,10 +677,10 @@ impl World {
         }
         let vp = pj * view;
 
-        // cascades follow a point a little ahead of the camera, as they follow the hero in the game
+        // cascades follow the hero, a little ahead in the view direction
         let fwd = glam::Vec3::new(cam.yaw.sin(), 0.0, -cam.yaw.cos());
         let sun = [self.frame[60], self.frame[61], self.frame[62]];
-        let redo = [self.update_cascade(0, cam.pos + fwd * (NEAR_EXT * 0.5), sun, NEAR_EXT), self.update_cascade(1, cam.pos + fwd * (FAR_EXT * 0.4), sun, FAR_EXT)];
+        let redo = [self.update_cascade(0, focus + fwd * (NEAR_EXT * 0.3), sun, NEAR_EXT), self.update_cascade(1, focus + fwd * (FAR_EXT * 0.3), sun, FAR_EXT)];
 
         let pf = self.pf;
         let f = &mut self.frame;
@@ -689,7 +702,7 @@ impl World {
         f[pf.res..pf.res + 4].copy_from_slice(&[w as f32, h as f32, 1.0 / w as f32, 1.0 / h as f32]);
         f[pf.out_res..pf.out_res + 4].copy_from_slice(&[w as f32, h as f32, 1.0 / w as f32, 1.0 / h as f32]);
         f[pf.focal] = h as f32 * 0.5 * proj.y_axis.y;
-        f[124..127].copy_from_slice(&cam.pos.to_array()); // player: the camera stands in for the hero
+        f[124..127].copy_from_slice(&focus.to_array()); // player (grass bends away from it)
         f[32..48].copy_from_slice(&self.casc[0].mat);
         f[376..392].copy_from_slice(&self.casc[1].mat);
         let ssv = |on: bool| if on && self.ss_valid { 1.0 } else { 0.0 };

@@ -10,6 +10,7 @@ pub struct Props {
     radius: Vec<f32>,
     inst: Vec<u32>,
     n: usize,
+    n_dyn: usize,
     vis_base: Vec<u32>,
     pub minfo: wgpu::Buffer,
     pub mfaces: wgpu::Buffer,
@@ -29,6 +30,8 @@ pub struct Props {
 }
 
 const W: usize = 16; // words per instance
+/// instances the game writes every frame (the hero's rig parts...), after the static ones
+pub const DYN: usize = 16;
 
 impl Props {
     pub fn new(d: &wgpu::Device, pack: &Pack) -> Result<Option<Self>, String> {
@@ -37,12 +40,14 @@ impl Props {
         }
         let meta = parse_models(&pack.read("models/models.json")?)?;
         let faces = pack.read_data("models/faces.bin.zst")?;
-        let inst = u32s(&pack.read_data("models/instances.bin.zst")?);
+        let mut inst = u32s(&pack.read_data("models/instances.bin.zst")?);
         let n = inst.len() / W;
-        let mut cap = vec![0u32; meta.len()];
+        // every model may also be used twice by the dynamic slots (the rig draws the leg twice)
+        let mut cap = vec![2u32; meta.len()];
         for i in 0..n {
             cap[inst[i * W + 12] as usize] += 1;
         }
+        inst.resize((n + DYN) * W, 0);
         let mut vis_base = Vec::with_capacity(meta.len());
         let mut info: Vec<u8> = Vec::with_capacity(meta.len() * 48);
         let mut acc = 0u32;
@@ -77,6 +82,7 @@ impl Props {
             max_quads: meta.iter().map(|m| m.face_count).max().unwrap_or(1),
             radius,
             n,
+            n_dyn: 0,
             minfo: init("minfo", &info, sb),
             mfaces: init("mfaces", &faces, sb),
             insts: init("insts", &inst_bytes, sb),
@@ -96,6 +102,14 @@ impl Props {
         }))
     }
 
+    /// Writes the dynamic instances (16 words each, at most DYN) after the static ones.
+    pub fn set_dynamic(&mut self, q: &wgpu::Queue, words: &[u32]) {
+        let k = (words.len() / W).min(DYN);
+        self.inst[self.n * W..(self.n + k) * W].copy_from_slice(&words[..k * W]);
+        self.n_dyn = k;
+        q.write_buffer(&self.insts, (self.n * W * 4) as u64, bytemuck_u32(&self.inst[self.n * W..(self.n + k) * W]));
+    }
+
     fn pos(&self, i: usize) -> ([f32; 3], f32) {
         let f = |k: usize| f32::from_bits(self.inst[i * W + k]);
         let scale = (f(0) * f(0) + f(1) * f(1) + f(2) * f(2)).sqrt();
@@ -105,7 +119,7 @@ impl Props {
     /// CULL_SHADER cullMain for the dream world (no transition wave), draw-distance and switch multipliers 1.
     pub fn cull(&mut self, q: &wgpu::Queue, cam: [f32; 3], planes: &[[f32; 4]; 6]) {
         self.count.iter_mut().for_each(|c| *c = 0);
-        for i in 0..self.n {
+        for i in 0..self.n + self.n_dyn {
             let (mask, mi) = (self.inst[i * W + 13], self.inst[i * W + 12] as usize);
             if mask & 1 == 0 {
                 continue;
@@ -138,7 +152,7 @@ impl Props {
     /// CULL_SHADER cullShadow for cascade `k`: casters (flag 1) within `ext` of the cascade centre.
     pub fn cull_shadow(&mut self, q: &wgpu::Queue, k: usize, cx: f32, cz: f32, ext: f32) {
         self.count_shadow[k].iter_mut().for_each(|c| *c = 0);
-        for i in 0..self.n {
+        for i in 0..self.n + self.n_dyn {
             let (mask, mi) = (self.inst[i * W + 13], self.inst[i * W + 12] as usize);
             if mask & 1 == 0 || mask & 16 != 0 || self.meta[mi].flags & 1 == 0 {
                 continue;

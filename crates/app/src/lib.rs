@@ -1,6 +1,9 @@
 //! Window, lifecycle and the frame loop. Android enters through `android_main`, desktop through `main.rs`.
 use mezdu_core::Pack;
 use mezdu_gfx::world::{Camera, World};
+use mezdu_game::player::{Input, Player};
+use mezdu_game::rig::{write_rig, RigModels};
+use mezdu_game::voxels::Voxels;
 use mezdu_gfx::Gfx;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,17 +22,35 @@ const SKY_VULKAN: [f64; 3] = [0.36, 0.47, 0.58];
 const SKY_GL: [f64; 3] = [0.62, 0.48, 0.22];
 const SKY_ERROR: [f64; 3] = [0.45, 0.06, 0.05];
 
+/// chapter 1 spawn (chapters_data.js: voxel 454, 2234, facing +z) and a height hint above the ground floor
+const SPAWN: [f32; 4] = [454.0 * 0.125, 8.5, 2234.0 * 0.125, 0.0];
+
+/// touch id, where the finger landed, where it is now
+type Joystick = (u64, (f64, f64), (f64, f64));
+
+/// the hero walking the voxel world (player.js) with the rig drawn by the renderer
+struct Hero {
+    vox: Voxels,
+    player: Player,
+    rig: Option<RigModels>,
+    words: Vec<u32>,
+    /// on-screen joystick: touch id, where it started, where it is
+    joy: Option<Joystick>,
+    look: [f32; 2],
+}
+
 pub struct App {
     data_dir: PathBuf,
     pack: Option<Pack>,
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
     world: Option<World>,
+    hero: Option<Hero>,
     cam: Camera,
     touches: HashMap<u64, (f64, f64)>,
     mouse: Option<(f64, f64)>,
     mouse_down: bool,
-    keys: [bool; 6],
+    keys: [bool; 7],
     last: Instant,
     start: Instant,
     next_frame: Instant,
@@ -54,15 +75,28 @@ impl App {
                 None
             }
         };
+        let hero = pack.as_ref().and_then(|p| match Voxels::load(p) {
+            Ok(vox) => {
+                let mut player = Player::new(&vox);
+                player.spawn(&vox, SPAWN[0], SPAWN[2], SPAWN[1], SPAWN[3]);
+                log::info!("hero at {:.2?}", player.pos);
+                Some(Hero { vox, player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] })
+            }
+            Err(e) => {
+                log::warn!("no voxels, free camera: {e}");
+                None
+            }
+        });
         App { data_dir, pack, window: None,
             gfx: None,
             world: None,
+            hero,
             // chapter 1: in the street in front of the house, looking north at it
             cam: Camera { pos: glam::Vec3::new(54.0, 11.0, 312.0), yaw: -0.25, pitch: -0.18, fov_y: 1.0 },
             touches: HashMap::new(),
             mouse: None,
             mouse_down: false,
-            keys: [false; 6],
+            keys: [false; 7],
             last: Instant::now(),
             start: Instant::now(),
             next_frame: Instant::now(),
@@ -104,6 +138,9 @@ impl ApplicationHandler for App {
                         match g.try_world(p, 1) {
                             Ok(w) => {
                                 log::info!("quality: {:?}", w.quality);
+                                if let Some(h) = &mut self.hero {
+                                    h.rig = RigModels::find("hero", &w.model_names());
+                                }
                                 self.world = Some(w);
                             }
                             Err(e) => {
@@ -169,6 +206,7 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::KeyD) => 3,
                     PhysicalKey::Code(KeyCode::KeyE) => 4,
                     PhysicalKey::Code(KeyCode::KeyQ) => 5,
+                    PhysicalKey::Code(KeyCode::ShiftLeft) => 6,
                     _ => return,
                 };
                 self.keys[k] = event.state == ElementState::Pressed;
@@ -178,13 +216,39 @@ impl ApplicationHandler for App {
                 self.last = Instant::now();
                 let k = |i: usize| if self.keys[i] { 1.0 } else { 0.0 };
                 let (fw, st, up) = (k(0) - k(1), k(3) - k(2), k(4) - k(5));
-                if fw != 0.0 || st != 0.0 || up != 0.0 {
+                let time = self.frozen.unwrap_or_else(|| self.start.elapsed().as_secs_f32());
+                let mut focus = self.cam.pos;
+                let size = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
+                if let Some(h) = &mut self.hero {
+                    // joystick: the finger's offset from where it touched down, full speed at 9 % of the short side
+                    let mut mv = [st, fw];
+                    if let Some((_, s0, s1)) = h.joy {
+                        let r = (size.width.min(size.height) as f64 * 0.09).max(1.0);
+                        let (x, y) = (((s1.0 - s0.0) / r) as f32, (-(s1.1 - s0.1) / r) as f32);
+                        let l = x.hypot(y).max(1.0);
+                        mv = [x / l, y / l];
+                    }
+                    let inp = Input { mv, look: h.look, run: self.keys[6] };
+                    h.look = [0.0; 2];
+                    h.player.update(dt, &inp, &h.vox);
+                    h.player.update_camera(dt, &inp, &h.vox, size.height > size.width);
+                    let (p, t) = (glam::Vec3::from(h.player.cam_pos), glam::Vec3::from(h.player.cam_target));
+                    let f = (t - p).normalize_or(glam::Vec3::NEG_Z);
+                    self.cam = Camera { pos: p, yaw: f.x.atan2(-f.z), pitch: f.y.clamp(-1.0, 1.0).asin(), fov_y: self.cam.fov_y };
+                    let pp = h.player.pos;
+                    focus = glam::Vec3::new(pp[0], h.player.vis_y, pp[2]);
+                    if let (Some(rig), Some(w), Some(g)) = (&h.rig, &mut self.world, &self.gfx) {
+                        h.words.clear();
+                        write_rig(&mut h.words, rig, focus.to_array(), h.player.yaw, h.player.walking, h.player.phase, h.player.speed, time);
+                        w.set_dynamic(&g.queue, &h.words);
+                    }
+                } else if fw != 0.0 || st != 0.0 || up != 0.0 {
                     let c = &mut self.cam;
                     c.pos += (c.forward() * fw + c.right() * st + glam::Vec3::Y * up) * 6.0 * dt;
                 }
                 let Some(g) = &mut self.gfx else { return };
                 match &mut self.world {
-                    Some(w) => g.frame_world(w, &self.cam, self.frozen.unwrap_or_else(|| self.start.elapsed().as_secs_f32())),
+                    Some(w) => g.frame_world(w, &self.cam, focus, time),
                     None => g.frame(self.sky),
                 }
                 self.frames += 1;
@@ -195,7 +259,7 @@ impl ApplicationHandler for App {
                     self.fps_t = Instant::now();
                     let s = self.status();
                     match &self.world {
-                        Some(w) => log::info!("{s} · {} quads, {} instances, {} draws · cam {:.1?}", w.quads, w.instances, w.calls, self.cam.pos),
+                        Some(w) => log::info!("{s} · {} quads, {} instances, {} draws · cam {:.1?} · hero {:.2?}", w.quads, w.instances, w.calls, self.cam.pos, self.hero.as_ref().map(|h| h.player.pos)),
                         None => log::info!("{s}"),
                     }
                     if let Some(w) = &self.window {
@@ -210,13 +274,43 @@ impl ApplicationHandler for App {
 
 impl App {
     fn look(&mut self, dx: f64, dy: f64) {
+        if let Some(h) = &mut self.hero {
+            h.look[0] += dx as f32;
+            h.look[1] += dy as f32;
+            return;
+        }
         self.cam.yaw += dx as f32 * 0.005;
         self.cam.pitch = (self.cam.pitch - dy as f32 * 0.005).clamp(-1.5, 1.5);
     }
 
-    /// One finger looks around; two fingers move: drag up/down = forward/back, left/right = sideways.
+    /// With the hero: a finger that lands on the left 45 % of the screen is the joystick, any other finger looks
+    /// around. Without it (free camera): one finger looks, two fingers move.
     fn touch(&mut self, t: Touch) {
         let p = (t.location.x, t.location.y);
+        let width = self.window.as_ref().map_or(1, |w| w.inner_size().width) as f64;
+        if let Some(h) = &mut self.hero {
+            match t.phase {
+                TouchPhase::Started if h.joy.is_none() && p.0 < width * 0.45 => h.joy = Some((t.id, p, p)),
+                TouchPhase::Moved if h.joy.is_some_and(|j| j.0 == t.id) => {
+                    if let Some(j) = &mut h.joy {
+                        j.2 = p;
+                    }
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled if h.joy.is_some_and(|j| j.0 == t.id) => h.joy = None,
+                TouchPhase::Started => {
+                    self.touches.insert(t.id, p);
+                }
+                TouchPhase::Moved => {
+                    if let Some(old) = self.touches.insert(t.id, p) {
+                        self.look(p.0 - old.0, p.1 - old.1);
+                    }
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.touches.remove(&t.id);
+                }
+            }
+            return;
+        }
         match t.phase {
             TouchPhase::Started => {
                 self.touches.insert(t.id, p);

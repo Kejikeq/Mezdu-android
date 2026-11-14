@@ -980,6 +980,7 @@ dependencies = [
  "glam",
  "log",
  "mezdu-core",
+ "mezdu-game",
  "mezdu-gfx",
  "winit",
 ]
@@ -993,6 +994,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "mezdu-game"
+version = "0.1.0"
+dependencies = [
+ "mezdu-core",
+ "serde_json",
 ]
 
 [[package]]
