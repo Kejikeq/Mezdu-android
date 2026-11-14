@@ -1,0 +1,10 @@
+[package]
+name = "mezdu-gfx"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wgpu.workspace = true
+log.workspace = true
+pollster.workspace = true
+mezdu-core.workspace = true

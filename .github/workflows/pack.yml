@@ -1,0 +1,53 @@
+# Content pack from the game repo Kejikeq/- (private): needs secret GAME_REPO_TOKEN (fine-grained, read-only Contents on Kejikeq/-).
+# Runs every 30 min; rebuilds only when main of Kejikeq/- has a new commit. Published as release "pack":
+# every pack file is an asset named path with '/' -> '__' (see mezdu_core::asset_name), plus manifest.json.
+name: pack
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: token check
+        env:
+          T: ${{ secrets.GAME_REPO_TOKEN }}
+        run: '[ -n "$T" ] || { echo "::error::add secret GAME_REPO_TOKEN (read access to Kejikeq/-)"; exit 1; }'
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Kejikeq/-
+          ref: main
+          token: ${{ secrets.GAME_REPO_TOKEN }}
+          path: game
+      - name: up to date?
+        id: cmp
+        run: |
+          new=$(git -C game rev-parse HEAD)
+          old=$(curl -fsSL -H "Authorization: Bearer ${{ github.token }}" "https://github.com/${{ github.repository }}/releases/download/pack/manifest.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])' 2>/dev/null || true)
+          echo "game $new, pack $old"
+          if [ "$new" = "$old" ] && [ "${{ github.event_name }}" = schedule ]; then echo skip=1 >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-node@v4
+        if: steps.cmp.outputs.skip != '1'
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.cmp.outputs.skip != '1'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.cmp.outputs.skip != '1'
+      - name: export + validate
+        if: steps.cmp.outputs.skip != '1'
+        run: |
+          node game/tools/export-native.mjs "$PWD/pack"
+          cargo run --release -p mezdu-core --bin packcheck -- pack
+          mkdir flat && (cd pack && find . -type f | sed 's|^\./||' | while read f; do cp "$f" "../flat/${f//\//__}"; done)
+      - uses: softprops/action-gh-release@v2
+        if: steps.cmp.outputs.skip != '1'
+        with:
+          tag_name: pack
+          name: Контент-пак (последний)
+          make_latest: false
+          files: flat/*

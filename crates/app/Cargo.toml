@@ -1,0 +1,48 @@
+[package]
+name = "mezdu-app"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "mezdu"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "mezdu"
+path = "src/main.rs"
+
+[dependencies]
+mezdu-core.workspace = true
+mezdu-gfx.workspace = true
+winit.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+env_logger = "0.11"
+
+[package.metadata.android]
+package = "ru.mezhdu.game"
+build_targets = ["aarch64-linux-android"]
+apk_name = "mezhdu"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 34
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.vulkan.level"
+required = false
+version = 1
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[package.metadata.android.application]
+label = "МЕЖДУ"
+
+[package.metadata.android.application.activity]
+orientation = "sensorLandscape"
+config_changes = "orientation|screenSize|screenLayout|keyboardHidden"

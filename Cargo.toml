@@ -1,0 +1,28 @@
+[workspace]
+members = ["crates/core", "crates/gfx", "crates/app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+mezdu-core = { path = "crates/core" }
+mezdu-gfx = { path = "crates/gfx" }
+wgpu = "30"
+naga = { version = "30", features = ["wgsl-in"] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ruzstd = "0.8"
+sha2 = "0.10"
+log = "0.4"
+pollster = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+
+[profile.dev.package."*"]
+opt-level = 2

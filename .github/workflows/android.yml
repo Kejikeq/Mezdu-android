@@ -1,0 +1,56 @@
+# Builds the APK on every push to main and publishes it as release "app" (assets overwritten each time).
+name: android
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (desktop + android)
+        run: |
+          sudo apt-get install -y -q libxkbcommon-dev >/dev/null
+          cargo clippy --release -- -D warnings
+          cargo clippy --release --target aarch64-linux-android -p mezdu-app -- -D warnings
+      - name: cargo-apk
+        run: cargo install cargo-apk --locked
+      - name: keystore
+        # one stable key keeps updates installable over the old APK; add secret ANDROID_KEYSTORE_B64 (base64 .jks, password "android")
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then echo "$KS" | base64 -d > release.keystore
+          else
+            echo "::warning::ANDROID_KEYSTORE_B64 is not set: a throwaway key is used, the APK will not install over a previous one"
+            keytool -genkeypair -keystore release.keystore -storepass android -keypass android -alias mezdu -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=mezdu"
+          fi
+      - name: build
+        env:
+          CARGO_APK_RELEASE_KEYSTORE: ${{ github.workspace }}/release.keystore
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
+        run: |
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME" ANDROID_SDK_ROOT="$ANDROID_HOME"
+          cargo apk build -p mezdu-app --release
+          mkdir -p out && cp target/release/apk/*.apk out/mezhdu.apk
+          echo "${GITHUB_SHA::7} $(date -u +%FT%TZ)" > out/apk-version.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mezhdu-apk
+          path: out/mezhdu.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app
+          name: APK (последняя сборка)
+          make_latest: false
+          files: |
+            out/mezhdu.apk
+            out/apk-version.txt

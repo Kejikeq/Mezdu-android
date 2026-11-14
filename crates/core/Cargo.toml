@@ -1,0 +1,11 @@
+[package]
+name = "mezdu-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ruzstd.workspace = true
+sha2.workspace = true
+naga.workspace = true
