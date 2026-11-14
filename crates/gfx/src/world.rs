@@ -53,6 +53,14 @@ pub struct World {
     p_shadow: wgpu::RenderPipeline,
     p_shadow_leaf: wgpu::RenderPipeline,
     p_comp: wgpu::RenderPipeline,
+    p_ao: wgpu::RenderPipeline,
+    p_ssr: wgpu::RenderPipeline,
+    ao_u: wgpu::Buffer,
+    ssr_u: wgpu::Buffer,
+    res0: Bg0Res,
+    /// last frame's AO / SSR textures hold something (F.fx.x, F.fx2.x)
+    ss_valid: bool,
+    frame_no: u32,
     p_grass: Option<wgpu::RenderPipeline>,
     grass_quads: u32,
     props: Option<Props>,
@@ -68,6 +76,37 @@ pub struct World {
     pub calls: u32,
     pub shadow_passes: u32,
     prev_vp: [f32; 16],
+}
+
+/// everything bind group 0 (renderer.js L0) holds, so the main one can be rebuilt with screen-sized AO / SSR textures
+struct Bg0Res {
+    l0: wgpu::BindGroupLayout,
+    mats: wgpu::Buffer,
+    chunk_org: wgpu::Buffer,
+    bufs: [wgpu::Buffer; 5], // minfo, mfaces, insts, vis (main), gcol
+    dummy_sb: wgpu::Buffer,
+    views: [wgpu::TextureView; 8], // atlas det, noise3, lut, atlas pbr, env dream, env nightmare, brdf, white
+    shadow_smp: wgpu::Sampler,
+    rep_smp: wgpu::Sampler,
+}
+
+impl Bg0Res {
+    #[allow(clippy::too_many_arguments)]
+    fn make(&self, d: &wgpu::Device, label: &str, fb: &wgpu::Buffer, s0: &wgpu::TextureView, s1: &wgpu::TextureView, vis: &wgpu::Buffer, ao: &wgpu::TextureView, ssr: &wgpu::TextureView) -> wgpu::BindGroup {
+        let [minfo, mfaces, insts, _, gcol] = &self.bufs;
+        let [atlas, noise, lut, pbr, env_d, env_n, brdf, _] = &self.views;
+        d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.l0,
+            entries: &[
+                be(0, buf(fb)), be(1, tv(s0)), be(2, wgpu::BindingResource::Sampler(&self.shadow_smp)), be(3, buf(&self.mats)),
+                be(4, buf(&self.chunk_org)), be(5, buf(minfo)), be(6, buf(mfaces)), be(7, buf(insts)), be(8, buf(vis)),
+                be(9, buf(&self.dummy_sb)), be(10, tv(atlas)), be(11, buf(gcol)), be(12, tv(noise)),
+                be(13, wgpu::BindingResource::Sampler(&self.rep_smp)), be(14, tv(lut)), be(15, tv(pbr)),
+                be(16, tv(env_d)), be(17, tv(env_n)), be(18, tv(brdf)), be(19, tv(s1)), be(20, tv(ao)), be(21, tv(ssr)),
+            ],
+        })
+    }
 }
 
 /// the inputs of fsComp that are not render targets of this frame
@@ -86,6 +125,10 @@ struct Targets {
     depth: wgpu::TextureView,
     hist: wgpu::TextureView,
     comp_bg: wgpu::BindGroup,
+    ao: wgpu::TextureView,
+    ssr: wgpu::TextureView,
+    ao_bg: wgpu::BindGroup,
+    ssr_bg: wgpu::BindGroup,
 }
 
 fn tex(d: &wgpu::Device, label: &str, size: wgpu::Extent3d, dim: wgpu::TextureDimension, format: wgpu::TextureFormat, mips: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
@@ -309,25 +352,25 @@ impl World {
             mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        // the main pass reads the cascades; the shadow passes get the 1x1 stand-in and their own frame (shadowMat)
-        let pb = |f: fn(&Props) -> &wgpu::Buffer| props.as_ref().map_or(&dummy_sb, f);
-        let (minfo, mfaces, insts, vis) = (pb(|p| &p.minfo), pb(|p| &p.mfaces), pb(|p| &p.insts), pb(|p| &p.vis));
-        let vis_sh = [pb(|p| &p.vis_shadow[0]), pb(|p| &p.vis_shadow[1])];
-        let world_bg = |label: &str, fb: &wgpu::Buffer, s0: &wgpu::TextureView, s1: &wgpu::TextureView, vis: &wgpu::Buffer| {
-            d.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &l0,
-                entries: &[
-                    be(0, buf(fb)), be(1, tv(s0)), be(2, wgpu::BindingResource::Sampler(&shadow_smp)), be(3, buf(&mats)),
-                    be(4, buf(&chunk_org)), be(5, buf(minfo)), be(6, buf(mfaces)), be(7, buf(insts)), be(8, buf(vis)),
-                    be(9, buf(&dummy_sb)), be(10, tv(&atlas[0])), be(11, buf(gcol.as_ref().unwrap_or(&dummy_sb))), be(12, tv(&noisev)),
-                    be(13, wgpu::BindingResource::Sampler(&rep_smp)), be(14, tv(&lutv)), be(15, tv(&atlas[1])),
-                    be(16, tv(&env_views[0])), be(17, tv(&env_views[1])), be(18, tv(&brdfv)), be(19, tv(s1)), be(20, tv(&whitev)), be(21, tv(&whitev)),
-                ],
-            })
+        // the main pass reads the cascades and last frame's AO / SSR (bound in targets()); the shadow passes get the
+        // 1x1 stand-ins and their own frame (shadowMat)
+        let pb = |f: fn(&Props) -> &wgpu::Buffer| props.as_ref().map_or(&dummy_sb, f).clone();
+        let res0 = Bg0Res {
+            l0,
+            mats,
+            chunk_org,
+            bufs: [pb(|p| &p.minfo), pb(|p| &p.mfaces), pb(|p| &p.insts), pb(|p| &p.vis), gcol.clone().unwrap_or_else(|| dummy_sb.clone())],
+            dummy_sb: dummy_sb.clone(),
+            views: [atlas[0].clone(), noisev, lutv.clone(), atlas[1].clone(), env_views[0].clone(), env_views[1].clone(), brdfv, whitev.clone()],
+            shadow_smp,
+            rep_smp,
         };
-        let bg0 = world_bg("bg_world", &frame_buf, &shadow[0], &shadow[1], vis);
-        let bg0_shadow = [world_bg("bg_world_shadow", &frame_buf, &depth1v, &depth1v, vis_sh[0]), world_bg("bg_world_shadow2", &frame_buf_c1, &depth1v, &depth1v, vis_sh[1])];
+        let vis_main = res0.bufs[3].clone();
+        let bg0 = res0.make(d, "bg_world", &frame_buf, &shadow[0], &shadow[1], &vis_main, &whitev, &whitev);
+        let bg0_shadow = [
+            res0.make(d, "bg_world_shadow", &frame_buf, &depth1v, &depth1v, &pb(|p| &p.vis_shadow[0]), &whitev, &whitev),
+            res0.make(d, "bg_world_shadow2", &frame_buf_c1, &depth1v, &depth1v, &pb(|p| &p.vis_shadow[1]), &whitev, &whitev),
+        ];
         let l1p = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("L1P"),
             entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: vf, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(16) }, count: None }],
@@ -342,8 +385,9 @@ impl World {
         let bg1 = d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("bg_faces"), layout: &l1, entries: &[be(0, buf(&faces_buf))] });
 
         let world = module(d, pack, "world")?;
-        let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layT"), bind_group_layouts: &[Some(&l0), Some(&l1)], immediate_size: 0 });
-        let lay_p = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layP"), bind_group_layouts: &[Some(&l0), Some(&l1p)], immediate_size: 0 });
+        let l0 = &res0.l0;
+        let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layT"), bind_group_layouts: &[Some(l0), Some(&l1)], immediate_size: 0 });
+        let lay_p = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layP"), bind_group_layouts: &[Some(l0), Some(&l1p)], immediate_size: 0 });
         let consts: &[(&str, f64)] = &[("WMODE", 0.0)];
         let opts = || wgpu::PipelineCompilationOptions { constants: consts, ..Default::default() };
         let pipe_l = |layout: &wgpu::PipelineLayout, label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| {
@@ -367,7 +411,7 @@ impl World {
             })
         };
         let pipe = |label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| pipe_l(&layout, label, vs, fs, cull, shadow);
-        let lay_part = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layPart"), bind_group_layouts: &[Some(&l0)], immediate_size: 0 });
+        let lay_part = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layPart"), bind_group_layouts: &[Some(l0)], immediate_size: 0 });
         let p_grass = (grass_quads > 0).then(|| pipe_l(&lay_part, "grass", "vsGrass", Some("fsGrass"), None, false));
         let p_prop = pipe_l(&lay_p, "props0", "vsProp", Some("fsProp"), Some(wgpu::Face::Back), false);
         let p_tree = pipe_l(&lay_p, "tree0", "vsProp", Some("fsTree"), None, false);
@@ -377,6 +421,13 @@ impl World {
         let p_shadow = pipe("shadow", "vsShadow", None, Some(wgpu::Face::Back), true);
         let p_shadow_leaf = pipe("shadowL0", "vsShadow", Some("fsShadowLeaf"), None, true);
 
+        // screen-space occlusion (half resolution) and reflections (quarter): renderer.js screenSpacePasses
+        let aom = module(d, pack, "ao")?;
+        let p_ao = full("ao", &aom, "fsAo", None, &[Some(wgpu::TextureFormat::Rgba8Unorm.into())]);
+        let ssrm = module(d, pack, "ssr")?;
+        let p_ssr = full("ssr", &ssrm, "fsSsr", None, &[Some(HDR.into())]);
+        let ao_u = d.create_buffer(&wgpu::BufferDescriptor { label: Some("ao u"), size: 16, usage: ub, mapped_at_creation: false });
+        let ssr_u = d.create_buffer(&wgpu::BufferDescriptor { label: Some("ssr u"), size: 16, usage: ub, mapped_at_creation: false });
         let compm = module(d, pack, "comp")?;
         let p_comp = full("comp", &compm, "fsComp", None, &[Some(surface_format.into()), Some(HDR.into())]);
         // no volumetric light yet: transmittance 1, nothing scattered; no depth of field
@@ -409,6 +460,13 @@ impl World {
             p_shadow,
             p_shadow_leaf,
             p_comp,
+            p_ao,
+            p_ssr,
+            ao_u,
+            ssr_u,
+            res0,
+            ss_valid: false,
+            frame_no: 0,
             p_grass,
             grass_quads,
             instances: props.as_ref().map_or(0, |p| p.count.len() as u32),
@@ -444,7 +502,24 @@ impl World {
                 be(7, tv(&r.dof)), be(8, tv(&hist_in)), be(9, tv(&gbuf)), be(10, tv(&r.lut)),
             ],
         });
-        self.targets = Some(Targets { w, h, hdr, gbuf, depth, hist, comp_bg });
+        let half = |label: &str, k: u32, f: wgpu::TextureFormat| tex(d, label, ext((w >> k).max(1), (h >> k).max(1), 1), wgpu::TextureDimension::D2, f, 1, u).create_view(&Default::default());
+        let (ao, ssr) = (half("ao", 1, wgpu::TextureFormat::Rgba8Unorm), half("ssr", 2, HDR));
+        let ao_bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg_ao"),
+            layout: &self.p_ao.get_bind_group_layout(0),
+            entries: &[be(0, buf(&self.frame_buf)), be(1, tv(&depth)), be(2, tv(&gbuf)), be(3, buf(&self.ao_u))],
+        });
+        let ssr_bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg_ssr"),
+            layout: &self.p_ssr.get_bind_group_layout(0),
+            entries: &[
+                be(0, buf(&self.frame_buf)), be(1, tv(&depth)), be(2, tv(&gbuf)), be(3, tv(&hdr)),
+                be(4, wgpu::BindingResource::Sampler(&self.comp_res.lin_smp)), be(5, buf(&self.ssr_u)),
+            ],
+        });
+        self.bg0 = self.res0.make(d, "bg_world", &self.frame_buf, &self.shadow[0], &self.shadow[1], &self.res0.bufs[3], &ao, &ssr);
+        self.ss_valid = false;
+        self.targets = Some(Targets { w, h, hdr, gbuf, depth, hist, comp_bg, ao, ssr, ao_bg, ssr_bg });
     }
 
     /// renderer.js updateCascade: an orthographic box around `center`, snapped to a grid and to the texels;
@@ -509,6 +584,8 @@ impl World {
         f[124..127].copy_from_slice(&cam.pos.to_array()); // player: the camera stands in for the hero
         f[32..48].copy_from_slice(&self.casc[0].mat);
         f[376..392].copy_from_slice(&self.casc[1].mat);
+        f[392] = if self.ss_valid { 1.0 } else { 0.0 }; // fx.x: AO texture valid
+        f[396] = f[392]; // fx2.x: SSR texture valid
         f[394] = self.casc[0].bias;
         f[395] = self.casc[1].bias;
         q.write_buffer(&self.frame_buf, 0, bytes(f));
@@ -639,6 +716,28 @@ impl World {
                 }
             }
         }
+        // QUALITY: ao 6 samples, contact shadow 6 steps, ssr 8 steps
+        let tph = (self.frame_no & 7) as f32;
+        self.frame_no = self.frame_no.wrapping_add(1);
+        q.write_buffer(&self.ao_u, 0, bytes(&[6.0, 6.0, tph, if self.frame[61] > 0.02 { 1.0 } else { 0.0 }]));
+        q.write_buffer(&self.ssr_u, 0, bytes(&[8.0, tph, 1.36, 0.0]));
+        {
+            let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ao"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &t.ao, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store } })],
+                ..Default::default()
+            });
+            p.set_pipeline(&self.p_ao);
+            p.set_bind_group(0, &t.ao_bg, &[]);
+            p.draw(0..3, 0..1);
+        }
+        {
+            let mut p = color_pass(enc, "ssr", &t.ssr);
+            p.set_pipeline(&self.p_ssr);
+            p.set_bind_group(0, &t.ssr_bg, &[]);
+            p.draw(0..3, 0..1);
+        }
+        self.ss_valid = true;
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("comp"),
             color_attachments: &[
