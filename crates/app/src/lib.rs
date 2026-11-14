@@ -168,7 +168,7 @@ impl ApplicationHandler for App {
                     self.fps_t = Instant::now();
                     let s = self.status();
                     match &self.world {
-                        Some(w) => log::info!("{s} · {} quads, {} draws · cam {:.1?}", w.quads, w.calls, self.cam.pos),
+                        Some(w) => log::info!("{s} · {} quads, {} instances, {} draws · cam {:.1?}", w.quads, w.instances, w.calls, self.cam.pos),
                         None => log::info!("{s}"),
                     }
                     if let Some(w) = &self.window {

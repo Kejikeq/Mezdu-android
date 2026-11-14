@@ -3,6 +3,7 @@
 //! HDR + G-buffer) -> final pass (COMP_SHADER fsComp: sky, fog, exposure, AgX, LUT, vignette, grain).
 //! The sky reflections are baked once with ENV_SHADER (fsEnv, fsLut). Bind group 0 mirrors renderer.js `L0`;
 //! still missing (neutral stand-ins): AO, SSR, volumetric light, DOF, TAA history, props, grass, water, particles.
+use crate::props::{frustum_planes, Props};
 use mezdu_core::{f32s, MacroMesh, Pack, PerFrame};
 use wgpu::util::DeviceExt;
 
@@ -52,6 +53,12 @@ pub struct World {
     p_shadow: wgpu::RenderPipeline,
     p_shadow_leaf: wgpu::RenderPipeline,
     p_comp: wgpu::RenderPipeline,
+    props: Option<Props>,
+    bg_model: Option<wgpu::BindGroup>,
+    p_prop: wgpu::RenderPipeline,
+    p_tree: wgpu::RenderPipeline,
+    p_prop_shadow: wgpu::RenderPipeline,
+    pub instances: u32,
     comp_res: CompRes,
     targets: Option<Targets>,
     draws: Vec<Draw>,
@@ -263,7 +270,8 @@ impl World {
         }
         let quads = (fw.len() / 3) as u32;
         let faces_buf = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("faces"), contents: &fw.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>(), usage: sb });
-        let max_draw = draws.iter().map(|d| d.opaque.max(d.leaves)).max().unwrap_or(0).max(1);
+        let props = Props::new(d, pack)?;
+        let max_draw = draws.iter().map(|d| d.opaque.max(d.leaves)).max().unwrap_or(0).max(props.as_ref().map_or(1, |p| p.max_quads)).max(1);
         let idx: Vec<u8> = (0..max_draw).flat_map(|q| { let b = q * 4; [b, b + 1, b + 2, b, b + 2, b + 3] }).flat_map(|i| i.to_le_bytes()).collect();
         let idx = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("quad idx"), contents: &idx, usage: wgpu::BufferUsages::INDEX });
 
@@ -293,32 +301,47 @@ impl World {
             ..Default::default()
         });
         // the main pass reads the cascades; the shadow passes get the 1x1 stand-in and their own frame (shadowMat)
-        let world_bg = |label: &str, fb: &wgpu::Buffer, s0: &wgpu::TextureView, s1: &wgpu::TextureView| {
+        let pb = |f: fn(&Props) -> &wgpu::Buffer| props.as_ref().map_or(&dummy_sb, f);
+        let (minfo, mfaces, insts, vis) = (pb(|p| &p.minfo), pb(|p| &p.mfaces), pb(|p| &p.insts), pb(|p| &p.vis));
+        let vis_sh = [pb(|p| &p.vis_shadow[0]), pb(|p| &p.vis_shadow[1])];
+        let world_bg = |label: &str, fb: &wgpu::Buffer, s0: &wgpu::TextureView, s1: &wgpu::TextureView, vis: &wgpu::Buffer| {
             d.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &l0,
                 entries: &[
                     be(0, buf(fb)), be(1, tv(s0)), be(2, wgpu::BindingResource::Sampler(&shadow_smp)), be(3, buf(&mats)),
-                    be(4, buf(&chunk_org)), be(5, buf(&dummy_sb)), be(6, buf(&dummy_sb)), be(7, buf(&dummy_sb)), be(8, buf(&dummy_sb)),
+                    be(4, buf(&chunk_org)), be(5, buf(minfo)), be(6, buf(mfaces)), be(7, buf(insts)), be(8, buf(vis)),
                     be(9, buf(&dummy_sb)), be(10, tv(&atlas[0])), be(11, buf(&dummy_sb)), be(12, tv(&noisev)),
                     be(13, wgpu::BindingResource::Sampler(&rep_smp)), be(14, tv(&lutv)), be(15, tv(&atlas[1])),
                     be(16, tv(&env_views[0])), be(17, tv(&env_views[1])), be(18, tv(&brdfv)), be(19, tv(s1)), be(20, tv(&whitev)), be(21, tv(&whitev)),
                 ],
             })
         };
-        let bg0 = world_bg("bg_world", &frame_buf, &shadow[0], &shadow[1]);
-        let bg0_shadow = [world_bg("bg_world_shadow", &frame_buf, &depth1v, &depth1v), world_bg("bg_world_shadow2", &frame_buf_c1, &depth1v, &depth1v)];
+        let bg0 = world_bg("bg_world", &frame_buf, &shadow[0], &shadow[1], vis);
+        let bg0_shadow = [world_bg("bg_world_shadow", &frame_buf, &depth1v, &depth1v, vis_sh[0]), world_bg("bg_world_shadow2", &frame_buf_c1, &depth1v, &depth1v, vis_sh[1])];
+        let l1p = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("L1P"),
+            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: vf, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(16) }, count: None }],
+        });
+        let bg_model = props.as_ref().map(|p| {
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bg_model"),
+                layout: &l1p,
+                entries: &[be(0, wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &p.model_u, offset: 0, size: wgpu::BufferSize::new(16) }))],
+            })
+        });
         let bg1 = d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("bg_faces"), layout: &l1, entries: &[be(0, buf(&faces_buf))] });
 
         let world = module(d, pack, "world")?;
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layT"), bind_group_layouts: &[Some(&l0), Some(&l1)], immediate_size: 0 });
+        let lay_p = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layP"), bind_group_layouts: &[Some(&l0), Some(&l1p)], immediate_size: 0 });
         let consts: &[(&str, f64)] = &[("WMODE", 0.0)];
         let opts = || wgpu::PipelineCompilationOptions { constants: consts, ..Default::default() };
-        let pipe = |label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| {
+        let pipe_l = |layout: &wgpu::PipelineLayout, label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| {
             let targets = [Some(HDR.into()), Some(GBUF.into())];
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState { module: &world, entry_point: Some(vs), compilation_options: opts(), buffers: &[] },
                 fragment: fs.map(|fs| wgpu::FragmentState { module: &world, entry_point: Some(fs), compilation_options: opts(), targets: if shadow { &[] } else { &targets } }),
                 primitive: wgpu::PrimitiveState { cull_mode: cull, ..Default::default() },
@@ -334,6 +357,10 @@ impl World {
                 cache: None,
             })
         };
+        let pipe = |label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| pipe_l(&layout, label, vs, fs, cull, shadow);
+        let p_prop = pipe_l(&lay_p, "props0", "vsProp", Some("fsProp"), Some(wgpu::Face::Back), false);
+        let p_tree = pipe_l(&lay_p, "tree0", "vsProp", Some("fsTree"), None, false);
+        let p_prop_shadow = pipe_l(&lay_p, "propShadow", "vsPropShadow", Some("fsPropShadow"), None, true);
         let p_terrain = pipe("terrain0", "vsTerrain", Some("fsTerrain"), Some(wgpu::Face::Back), false);
         let p_leaf = pipe("leaf0", "vsTerrain", Some("fsLeaf"), None, false);
         let p_shadow = pipe("shadow", "vsShadow", None, Some(wgpu::Face::Back), true);
@@ -371,6 +398,12 @@ impl World {
             p_shadow,
             p_shadow_leaf,
             p_comp,
+            instances: props.as_ref().map_or(0, |p| p.count.len() as u32),
+            props,
+            bg_model,
+            p_prop,
+            p_tree,
+            p_prop_shadow,
             comp_res,
             targets: None,
             draws,
@@ -472,6 +505,16 @@ impl World {
             q.write_buffer(&self.frame_buf_c1, 0, bytes(&self.frame_c1));
         }
 
+        if let Some(pr) = &mut self.props {
+            pr.cull(q, cam.pos.to_array(), &frustum_planes(&vp));
+            for (k, &again) in redo.iter().enumerate() {
+                if again {
+                    let cs = &self.casc[k];
+                    pr.cull_shadow(q, k, cs.cx, cs.cz, if k == 1 { FAR_EXT } else { NEAR_EXT });
+                }
+            }
+            self.instances = pr.count.iter().sum();
+        }
         self.calls = 0;
         self.shadow_passes = 0;
         for (k, &again) in redo.iter().enumerate() {
@@ -510,6 +553,17 @@ impl World {
                     self.calls += 1;
                 }
             }
+            if let (Some(pr), Some(bgm)) = (&self.props, &self.bg_model) {
+                p.set_pipeline(&self.p_prop_shadow);
+                for &mi in &pr.casters {
+                    let n = pr.count_shadow[k][mi];
+                    if n > 0 {
+                        p.set_bind_group(1, bgm, &[(mi * 256) as u32]);
+                        p.draw_indexed(0..pr.meta[mi].face_count * 6, 0, 0..n);
+                        self.calls += 1;
+                    }
+                }
+            }
         }
 
         let t = self.targets.as_ref().expect("targets");
@@ -528,8 +582,19 @@ impl World {
                 ..Default::default()
             });
             p.set_bind_group(0, &self.bg0, &[]);
-            p.set_bind_group(1, &self.bg1, &[]);
             p.set_index_buffer(self.idx.slice(..), wgpu::IndexFormat::Uint32);
+            // models first (big occluders), as renderer.js mainPass
+            if let (Some(pr), Some(bgm)) = (&self.props, &self.bg_model) {
+                p.set_pipeline(&self.p_prop);
+                for &mi in &pr.others {
+                    if pr.count[mi] > 0 {
+                        p.set_bind_group(1, bgm, &[(mi * 256) as u32]);
+                        p.draw_indexed(0..pr.meta[mi].face_count * 6, 0, 0..pr.count[mi]);
+                        self.calls += 1;
+                    }
+                }
+            }
+            p.set_bind_group(1, &self.bg1, &[]);
             p.set_pipeline(&self.p_terrain);
             for dr in &self.draws {
                 if dr.opaque > 0 {
@@ -542,6 +607,16 @@ impl World {
                 if dr.leaves > 0 {
                     p.draw_indexed(0..dr.leaves * 6, (dr.leaf_base * 4) as i32, 0..1);
                     self.calls += 1;
+                }
+            }
+            if let (Some(pr), Some(bgm)) = (&self.props, &self.bg_model) {
+                p.set_pipeline(&self.p_tree);
+                for &mi in &pr.trees {
+                    if pr.count[mi] > 0 {
+                        p.set_bind_group(1, bgm, &[(mi * 256) as u32]);
+                        p.draw_indexed(0..pr.meta[mi].face_count * 6, 0, 0..pr.count[mi]);
+                        self.calls += 1;
+                    }
                 }
             }
         }

@@ -189,3 +189,46 @@ pub struct PerFrame {
     pub focal: usize,
     pub floats: usize,
 }
+
+/// One model of `models/models.json` (meshed as the game's worker does in 'modelsBatch').
+#[derive(Deserialize, Debug, Clone)]
+pub struct ModelMeta {
+    pub name: String,
+    #[serde(rename = "faceStart")]
+    pub face_start: u32,
+    #[serde(rename = "faceCount")]
+    pub face_count: u32,
+    pub flags: u32,
+    pub pivot: [f32; 3],
+    pub vs: f32,
+    pub bounds: [f32; 6],
+    #[serde(rename = "maxDist")]
+    pub max_dist: f32,
+    #[serde(rename = "minDist", default)]
+    pub min_dist: f32,
+}
+
+impl ModelMeta {
+    /// bounding radius in metres around the pivot, as renderer.js setModels
+    pub fn radius(&self) -> f32 {
+        let [x0, y0, z0, x1, y1, z1] = self.bounds;
+        let p = self.pivot;
+        let mut r: f32 = 0.0;
+        for x in [x0, x1] {
+            for y in [y0, y1] {
+                for z in [z0, z1] {
+                    r = r.max(((x - p[0]).powi(2) + (y - p[1]).powi(2) + (z - p[2]).powi(2)).sqrt());
+                }
+            }
+        }
+        r * self.vs
+    }
+}
+
+pub fn u32s(bytes: &[u8]) -> Vec<u32> {
+    bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect()
+}
+
+pub fn parse_models(json: &[u8]) -> Result<Vec<ModelMeta>, String> {
+    serde_json::from_slice(json).map_err(|e| format!("models.json: {e}"))
+}

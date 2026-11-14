@@ -15,7 +15,7 @@
  },
  "version": "v2.0.0",
  "commit": "301ce863f23809438e0e56dfaab3377f2b94d66a",
- "created": "2026-11-14T15:54:32.060Z",
+ "created": "2026-11-14T18:24:41.491Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -318,6 +318,25 @@
    "kind": "mesh",
    "tx": 2,
    "tz": 9
+  },
+  {
+   "path": "models/faces.bin.zst",
+   "sha256": "3908d6d8cc21d9e98675ef7387598e246af99e443384f72ad5bc7beff032f907",
+   "size": 2565334,
+   "kind": "models"
+  },
+  {
+   "path": "models/models.json",
+   "sha256": "2fbcea2542189d65afc75a68006a827751a4a77d7544ae1f426622b4cf1e8f63",
+   "size": 60888,
+   "kind": "models"
+  },
+  {
+   "path": "models/instances.bin.zst",
+   "sha256": "a7bfb773cf2ad0262f9c4e0d3b406464f467742165b9729df5831b0da64003e7",
+   "size": 62832,
+   "kind": "models",
+   "count": 4550
   },
   {
    "path": "frame/ch1.bin",

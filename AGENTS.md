@@ -12,6 +12,8 @@
 - `atlas/{det,pbr}_L0..4.bin.zst` — RGBA8 мип-уровни атласа, zstd, размеры в manifest. det хранит цвет/среднее ×0.25, шейдер умножает на 4;
 - `tex/fog.bin`, `tex/lut.bin` — маленькие запечённые текстуры;
 - `materials.bin` — f32, 256 × 8 (раскладка в manifest); `materials.json` — имена;
+- `mesh/<tx>_<tz>.bin.zst` — квады макро-чанков от мешера игры; `frame/ch<N>.bin` — шаблон кадрового uniform со светом главы N (поля камеры — `perFrame` в manifest);
+- `models/{faces.bin.zst,models.json,instances.bin.zst}` — модели (деревья, предметы) и их статичные экземпляры в районе мешей; расстановку снимает `node tools/check.mjs instances` из запущенной игры (только локально, в CI браузера нет — `bundle_pack.py` тогда сохраняет встроенные модели);
 - `world/<tx>_<tz>.bin.zst` — тайл 256×128×256 вокселей u16, индекс x + 256*(z + 256*y). Младший байт — материал Сна, старший — Кошмара. Воксель 0,125 м.
 
 **Пак и шейдеры здесь не править и формат не придумывать.** Если чего-то не хватает или шейдер не принимается — напиши пользователю блок «ДЛЯ CLAUDE» с точным текстом проблемы; правка делается в Kejikeq/-.
@@ -22,6 +24,7 @@
 - `crates/app` — winit 0.30: `android_main` (NativeActivity) и десктоп `main.rs`. Переменные: `MEZDU_PACK=<папка пака>`, `MEZDU_BACKEND=gl|vulkan`. Пока на экране нет текста, цвет фона — статус: голубой = Vulkan, янтарный = откат на GL, тёмно-красный = шейдер пака не скомпилировался.
 - `app/` — Gradle-оболочка без Java/Kotlin-кода: `android.app.NativeActivity` + `libmezdu.so`. **`app/src/main/jniLibs/{arm64-v8a,x86_64}/libmezdu.so` собирает CI из `crates/` и коммитит в main** — поэтому любой Gradle (в том числе AI Studio) собирает APK без Rust и NDK. Эти .so руками не трогать и не удалять; после правки Rust дождаться коммита `build: libmezdu.so …` от CI.
 - `app/src/main/assets/pack` — часть пака, встроенная в APK: шейдеры, материалы, fog/lut, атлас, шаблоны света `frame/ch*.bin`, меши главы 1 (`mesh/`, тайлы x 0..2, z 8..9). При запуске копируется в каталог данных. Остальной мир придёт с обновлятором (этап 2). Обновляет её `pack.yml` (`tools/bundle_pack.py`).
+- `crates/gfx/src/props.rs` — модели и экземпляры: отсечение на CPU по правилам `CULL_SHADER` (дистанция, уровни детализации `_l`/`_f`, пирамида видимости), рисуются `vsProp`+`fsProp`/`fsTree`, тени — `vsPropShadow`/`fsPropShadow`.
 - `crates/gfx/src/world.rs` — проходы как в renderer.js: каскады теней (`vsShadow`/`fsShadowLeaf`, 1024², ближний 14 м, дальний 40 м, перерисовка только при сдвиге) → основной (`vsTerrain` + `fsTerrain`/`fsLeaf`, WMODE 0 = Сон, HDR + G-буфер) → финальный `fsComp` из `comp.wgsl` (небо, туман, экспозиция, AgX, LUT, виньетка, зерно). Отражения неба и BRDF печёт `env.wgsl` (`fsEnv`, `fsLut`) при загрузке. Группа 0 повторяет `L0` из renderer.js по привязкам. Пока заглушки: AO, SSR, объёмный свет, DOF, история TAA. Камера: один палец — обзор, два — движение; на ПК мышь + WASD/QE.
 - `.github/workflows/android.yml` — clippy → .so (cargo-ndk) → коммит .so → `gradle assembleRelease` → релиз `app` (`mezhdu.apk`).
 - `.github/workflows/pack.yml` — каждые 30 мин берёт main из Kejikeq/- (секрет `GAME_REPO_TOKEN`), собирает и проверяет пак → релиз `pack` и лёгкий пак в assets. Имена файлов в релизе: `/` → `__` (`mezdu_core::asset_name`).
@@ -40,7 +43,7 @@
 - [ ] **2. Обновления.** `crates/updater`: скачать `manifest.json` из `https://github.com/Kejikeq/Mezdu-android/releases/download/pack/`, докачать файлы с другим sha256 (`asset_name`), атомарно заменить папку `pack` в каталоге данных, работать офлайн с последним паком. Проверка нового APK через `releases/download/app/apk-version.txt` и предложение установить. Нужен публичный репозиторий. HTTP — ureq с rustls.
 - [x] **3. Атлас и материалы на GPU.** Текстуры det/pbr с 5 мипами, таблица материалов, fog/lut.
 - [x] **4. Мир.** Меши макро-чанков из пака (мешер игры в export-native), отрисовка `vsTerrain`/`fsTerrain`/`fsLeaf`, камера-облёт; квады и вызовы в логе. Дальше: свой мешер на Rust для правок мира, отсечение по пирамиде видимости, вода, модели (деревья, предметы), текст на экране.
-- [ ] **5. Проходы рендера** в порядке веб-версии (`src/gfx/renderer.js` в Kejikeq/-). Готово: тени (2 каскада), запекание окружения, композит `fsComp`. Осталось: AO (`ao.wgsl`), SSR (`ssr.wgsl`), объём (`vol.wgsl`), TAA (`taa.wgsl` + история), автоэкспозиция (`exposure.wgsl`), DOF, вода, модели и трава; замер времени проходов.
+- [ ] **5. Проходы рендера** в порядке веб-версии (`src/gfx/renderer.js` в Kejikeq/-). Готово: тени (2 каскада, с деревьями и предметами), запекание окружения, композит `fsComp`, модели и деревья главы 1. Осталось: трава (`vsGrass`, нужна карта травы из worldgen), вода (`vsWater`), AO (`ao.wgsl`), SSR (`ssr.wgsl`), объём (`vol.wgsl`), TAA (`taa.wgsl` + история), автоэкспозиция (`exposure.wgsl`), DOF; замер времени проходов.
 - [ ] **6. Профиль качества** как `QUALITY` в `src/main.js` Kejikeq/-; урезанный профиль для GL; ограничение 30 FPS.
 
 Отмечай выполненный этап `[x]` в этом файле в том же коммите.
