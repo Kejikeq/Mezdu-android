@@ -143,7 +143,7 @@ pub struct MacroMesh {
 
 impl MacroMesh {
     pub fn parse_tile(bytes: &[u8]) -> Result<Vec<MacroMesh>, String> {
-        let w: Vec<u32> = bytes.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let w: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
         let mut out = Vec::new();
         let mut i = 0;
         while i < w.len() {
@@ -166,7 +166,7 @@ impl MacroMesh {
 }
 
 pub fn f32s(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]

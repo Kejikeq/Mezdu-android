@@ -17,8 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # pinned: a newer clippy brings new lints that would fail -D warnings on unchanged code
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: '1.97.0'
           targets: aarch64-linux-android,x86_64-linux-android
           components: clippy
       - uses: Swatinem/rust-cache@v2
