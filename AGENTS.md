@@ -21,7 +21,8 @@
 - `crates/gfx` — wgpu: `Gfx::new` пробует Vulkan, затем GL; `compile_shaders`; кадр.
 - `crates/app` — winit 0.30: `android_main` (NativeActivity) и десктоп `main.rs`. Переменные: `MEZDU_PACK=<папка пака>`, `MEZDU_BACKEND=gl|vulkan`. Пока на экране нет текста, цвет фона — статус: голубой = Vulkan, янтарный = откат на GL, тёмно-красный = шейдер пака не скомпилировался.
 - `app/` — Gradle-оболочка без Java/Kotlin-кода: `android.app.NativeActivity` + `libmezdu.so`. **`app/src/main/jniLibs/{arm64-v8a,x86_64}/libmezdu.so` собирает CI из `crates/` и коммитит в main** — поэтому любой Gradle (в том числе AI Studio) собирает APK без Rust и NDK. Эти .so руками не трогать и не удалять; после правки Rust дождаться коммита `build: libmezdu.so …` от CI.
-- `app/src/main/assets/pack` — лёгкая часть пака (шейдеры, материалы, fog/lut), встроена в APK; при запуске копируется в каталог данных. Атлас и мир придут с обновлятором (этап 2). Обновляет её `pack.yml` (`tools/bundle_pack.py`).
+- `app/src/main/assets/pack` — часть пака, встроенная в APK: шейдеры, материалы, fog/lut, атлас, шаблоны света `frame/ch*.bin`, меши главы 1 (`mesh/`, тайлы x 0..2, z 8..9). При запуске копируется в каталог данных. Остальной мир придёт с обновлятором (этап 2). Обновляет её `pack.yml` (`tools/bundle_pack.py`).
+- `crates/gfx/src/world.rs` — мир шейдером игры: `vsTerrain` + `fsTerrain`/`fsLeaf` (WMODE 0 = Сон) в HDR + G-буфер, группа 0 повторяет `L0` из renderer.js по привязкам; тени, AO, SSR, окружение — нейтральные заглушки до этапа 5. Вывод на экран — `PRESENT_WGSL` (экспозиция, AgX, LUT как в конце `fsComp`). Камера: один палец — обзор, два — движение; на ПК мышь + WASD/QE.
 - `.github/workflows/android.yml` — clippy → .so (cargo-ndk) → коммит .so → `gradle assembleRelease` → релиз `app` (`mezhdu.apk`).
 - `.github/workflows/pack.yml` — каждые 30 мин берёт main из Kejikeq/- (секрет `GAME_REPO_TOKEN`), собирает и проверяет пак → релиз `pack` и лёгкий пак в assets. Имена файлов в релизе: `/` → `__` (`mezdu_core::asset_name`).
 - AI Studio: не переписывать проект в Kotlin/Compose и не заменять `app/`; только собирать и запускать. Если сборка падает — исправлять Gradle-файлы, не трогая `crates/` и `jniLibs`.
@@ -37,8 +38,8 @@
 ## Этапы
 - [x] **1. Каркас.** Окно, wgpu с Vulkan→GL, очистка экрана цветом статуса, FPS в логе, компиляция всех шейдеров встроенного пака, Gradle-оболочка, CI с .so и APK.
 - [ ] **2. Обновления.** `crates/updater`: скачать `manifest.json` из `https://github.com/Kejikeq/Mezdu-android/releases/download/pack/`, докачать файлы с другим sha256 (`asset_name`), атомарно заменить папку `pack` в каталоге данных, работать офлайн с последним паком. Проверка нового APK через `releases/download/app/apk-version.txt` и предложение установить. Нужен публичный репозиторий. HTTP — ureq с rustls.
-- [ ] **3. Атлас и материалы на GPU.** Текстуры det/pbr с 5 мипами, таблица материалов, fog/lut.
-- [ ] **4. Мир.** Распаковка тайлов, многопоточный мешер чанков под входы `vsTerrain` в `shaders/world.wgsl`, камера-облёт (касание — поворот, два пальца — движение), квады и вызовы в оверлее.
+- [x] **3. Атлас и материалы на GPU.** Текстуры det/pbr с 5 мипами, таблица материалов, fog/lut.
+- [x] **4. Мир.** Меши макро-чанков из пака (мешер игры в export-native), отрисовка `vsTerrain`/`fsTerrain`/`fsLeaf`, камера-облёт; квады и вызовы в логе. Дальше: свой мешер на Rust для правок мира, отсечение по пирамиде видимости, вода, модели (деревья, предметы), текст на экране.
 - [ ] **5. Проходы рендера** в порядке веб-версии (`src/gfx/renderer.js` в Kejikeq/-): тени, AO, SSR, объём, TAA, экспозиция, композит; замер времени проходов.
 - [ ] **6. Профиль качества** как `QUALITY` в `src/main.js` Kejikeq/-; урезанный профиль для GL; ограничение 30 FPS.
 

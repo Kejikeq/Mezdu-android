@@ -7,4 +7,5 @@ edition.workspace = true
 wgpu.workspace = true
 log.workspace = true
 pollster.workspace = true
+glam.workspace = true
 mezdu-core.workspace = true

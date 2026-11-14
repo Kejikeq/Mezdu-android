@@ -18,6 +18,7 @@ ruzstd = "0.8"
 sha2 = "0.10"
 log = "0.4"
 pollster = "0.4"
+glam = "0.34"
 
 [profile.release]
 opt-level = 3

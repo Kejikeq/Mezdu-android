@@ -45,6 +45,8 @@ pub struct Manifest {
     pub version: String,
     pub commit: String,
     pub constants: Constants,
+    #[serde(rename = "perFrame")]
+    pub per_frame: Option<PerFrame>,
     pub files: Vec<FileEntry>,
 }
 
@@ -127,4 +129,63 @@ pub fn validate_wgsl(name: &str, src: &str) -> Result<(), String> {
         .validate(&module)
         .map_err(|e| e.emit_to_string_with_path(src, name))?;
     Ok(())
+}
+
+/// Quads of one macro chunk (64 x 128 x 64 voxels) as the web mesher builds them (`mesh/<tx>_<tz>.bin.zst`).
+pub struct MacroMesh {
+    pub mcx: u32,
+    pub mcz: u32,
+    /// quads per group: dream-only, both worlds, nightmare-only, then the same three for leaves
+    pub c0: [u32; 6],
+    /// 3 u32 per quad, groups in the order of `c0`
+    pub faces: Vec<u32>,
+}
+
+impl MacroMesh {
+    pub fn parse_tile(bytes: &[u8]) -> Result<Vec<MacroMesh>, String> {
+        let w: Vec<u32> = bytes.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < w.len() {
+            if i + 9 > w.len() {
+                return Err("mesh: truncated header".into());
+            }
+            let c0 = [w[i + 2], w[i + 3], w[i + 4], w[i + 5], w[i + 6], w[i + 7]];
+            let nq: usize = c0.iter().map(|&c| c as usize).sum();
+            let nw = w[i + 8] as usize;
+            let f0 = i + 9;
+            let end = f0 + (nq + nw) * 3;
+            if end > w.len() {
+                return Err("mesh: truncated faces".into());
+            }
+            out.push(MacroMesh { mcx: w[i], mcz: w[i + 1], c0, faces: w[f0..f0 + nq * 3].to_vec() });
+            i = end;
+        }
+        Ok(out)
+    }
+}
+
+pub fn f32s(bytes: &[u8]) -> Vec<f32> {
+    bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct PerFrame {
+    #[serde(rename = "viewProj")]
+    pub view_proj: usize,
+    #[serde(rename = "invViewProj")]
+    pub inv_view_proj: usize,
+    pub cam: usize,
+    pub time: usize,
+    #[serde(rename = "camRight")]
+    pub cam_right: usize,
+    #[serde(rename = "camUp")]
+    pub cam_up: usize,
+    pub res: usize,
+    #[serde(rename = "outRes")]
+    pub out_res: usize,
+    #[serde(rename = "prevVP")]
+    pub prev_vp: usize,
+    pub focal: usize,
+    pub floats: usize,
 }

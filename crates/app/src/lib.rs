@@ -1,11 +1,14 @@
 //! Window, lifecycle and the frame loop. Android enters through `android_main`, desktop through `main.rs`.
 use mezdu_core::Pack;
+use mezdu_gfx::world::{Camera, World};
 use mezdu_gfx::Gfx;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -20,6 +23,14 @@ pub struct App {
     pack: Option<Pack>,
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
+    world: Option<World>,
+    cam: Camera,
+    touches: HashMap<u64, (f64, f64)>,
+    mouse: Option<(f64, f64)>,
+    mouse_down: bool,
+    keys: [bool; 6],
+    last: Instant,
+    start: Instant,
     sky: [f64; 3],
     frames: u32,
     fps_t: Instant,
@@ -39,7 +50,19 @@ impl App {
                 None
             }
         };
-        App { data_dir, pack, window: None, gfx: None, sky: SKY_VULKAN, frames: 0, fps_t: Instant::now(), fps: 0.0 }
+        App { data_dir, pack, window: None,
+            gfx: None,
+            world: None,
+            // chapter 1: in the street in front of the house, looking north at it
+            cam: Camera { pos: glam::Vec3::new(54.0, 11.0, 312.0), yaw: -0.25, pitch: -0.18, fov_y: 1.0 },
+            touches: HashMap::new(),
+            mouse: None,
+            mouse_down: false,
+            keys: [false; 6],
+            last: Instant::now(),
+            start: Instant::now(),
+            sky: SKY_VULKAN,
+            frames: 0, fps_t: Instant::now(), fps: 0.0 }
     }
 
     fn status(&self) -> String {
@@ -68,10 +91,18 @@ impl ApplicationHandler for App {
                     for (n, e) in &bad {
                         log::error!("shader {n}: {e}");
                     }
+                    log::info!("shaders: {} compiled, {} failed", p.manifest.of_kind("shader").count() - bad.len(), bad.len());
                     if !bad.is_empty() {
                         self.sky = SKY_ERROR;
+                    } else if g.backend != mezdu_gfx::wgpu::Backend::Gl {
+                        match World::new(&g.device, &g.queue, g.config.format, p, 1) {
+                            Ok(w) => self.world = Some(w),
+                            Err(e) => {
+                                log::error!("world: {e}");
+                                self.sky = SKY_ERROR;
+                            }
+                        }
                     }
-                    log::info!("shaders: {} compiled, {} failed", p.manifest.of_kind("shader").count() - bad.len(), bad.len());
                 }
                 self.gfx = Some(g);
             }
@@ -83,6 +114,7 @@ impl ApplicationHandler for App {
 
     // Android destroys the native window in the background: drop the surface, stop rendering (battery)
     fn suspended(&mut self, _el: &ActiveEventLoop) {
+        self.world = None;
         self.gfx = None;
     }
 
@@ -94,9 +126,40 @@ impl ApplicationHandler for App {
                     g.resize(s.width, s.height);
                 }
             }
+            WindowEvent::Touch(t) => self.touch(t),
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => self.mouse_down = state == ElementState::Pressed,
+            WindowEvent::CursorMoved { position, .. } => {
+                if let (Some((x, y)), true) = (self.mouse, self.mouse_down) {
+                    self.look(position.x - x, position.y - y);
+                }
+                self.mouse = Some((position.x, position.y));
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let k = match event.physical_key {
+                    PhysicalKey::Code(KeyCode::KeyW) => 0,
+                    PhysicalKey::Code(KeyCode::KeyS) => 1,
+                    PhysicalKey::Code(KeyCode::KeyA) => 2,
+                    PhysicalKey::Code(KeyCode::KeyD) => 3,
+                    PhysicalKey::Code(KeyCode::KeyE) => 4,
+                    PhysicalKey::Code(KeyCode::KeyQ) => 5,
+                    _ => return,
+                };
+                self.keys[k] = event.state == ElementState::Pressed;
+            }
             WindowEvent::RedrawRequested => {
+                let dt = self.last.elapsed().as_secs_f32().min(0.1);
+                self.last = Instant::now();
+                let k = |i: usize| if self.keys[i] { 1.0 } else { 0.0 };
+                let (fw, st, up) = (k(0) - k(1), k(3) - k(2), k(4) - k(5));
+                if fw != 0.0 || st != 0.0 || up != 0.0 {
+                    let c = &mut self.cam;
+                    c.pos += (c.forward() * fw + c.right() * st + glam::Vec3::Y * up) * 6.0 * dt;
+                }
                 let Some(g) = &mut self.gfx else { return };
-                g.frame(self.sky);
+                match &mut self.world {
+                    Some(w) => g.frame_world(w, &self.cam, self.start.elapsed().as_secs_f32()),
+                    None => g.frame(self.sky),
+                }
                 self.frames += 1;
                 let dt = self.fps_t.elapsed().as_secs_f32();
                 if dt >= 2.0 {
@@ -104,7 +167,10 @@ impl ApplicationHandler for App {
                     self.frames = 0;
                     self.fps_t = Instant::now();
                     let s = self.status();
-                    log::info!("{s}");
+                    match &self.world {
+                        Some(w) => log::info!("{s} · {} quads, {} draws · cam {:.1?}", w.quads, w.calls, self.cam.pos),
+                        None => log::info!("{s}"),
+                    }
                     if let Some(w) = &self.window {
                         w.set_title(&s);
                     }
@@ -114,6 +180,40 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+impl App {
+    fn look(&mut self, dx: f64, dy: f64) {
+        self.cam.yaw += dx as f32 * 0.005;
+        self.cam.pitch = (self.cam.pitch - dy as f32 * 0.005).clamp(-1.5, 1.5);
+    }
+
+    /// One finger looks around; two fingers move: drag up/down = forward/back, left/right = sideways.
+    fn touch(&mut self, t: Touch) {
+        let p = (t.location.x, t.location.y);
+        match t.phase {
+            TouchPhase::Started => {
+                self.touches.insert(t.id, p);
+            }
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                self.touches.remove(&t.id);
+            }
+            TouchPhase::Moved => {
+                let Some(old) = self.touches.insert(t.id, p) else { return };
+                let (dx, dy) = (p.0 - old.0, p.1 - old.1);
+                match self.touches.len() {
+                    1 => self.look(dx, dy),
+                    2 => {
+                        // each of the two fingers reports its own move: half the step per finger
+                        let c = &mut self.cam;
+                        let fwd = glam::Vec3::new(c.yaw.sin(), 0.0, -c.yaw.cos());
+                        c.pos += (fwd * (-dy as f32) + c.right() * (dx as f32)) * 0.02;
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }

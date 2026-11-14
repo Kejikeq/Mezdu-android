@@ -1,8 +1,21 @@
 {
  "format": 1,
+ "perFrame": {
+  "viewProj": 0,
+  "invViewProj": 16,
+  "cam": 48,
+  "time": 51,
+  "camRight": 52,
+  "camUp": 56,
+  "res": 108,
+  "outRes": 136,
+  "prevVP": 244,
+  "focal": 408,
+  "floats": 416
+ },
  "version": "v2.0.0",
- "commit": "a2e7a700876c6e613e786125e51b3f5e49e1f1c4",
- "created": "2026-11-14T15:23:16.011Z",
+ "commit": "301ce863f23809438e0e56dfaab3377f2b94d66a",
+ "created": "2026-11-14T15:54:32.060Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -128,6 +141,106 @@
    "name": "WORLD_SHADER"
   },
   {
+   "path": "atlas/det_L0.bin.zst",
+   "sha256": "d65c0dccc65d2ba9b2c261ab250126bf1c9e4e48912d36ff0a5516a1a2fb9045",
+   "size": 1058924,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 768,
+   "height": 6144,
+   "mip": 0
+  },
+  {
+   "path": "atlas/det_L1.bin.zst",
+   "sha256": "8bfb8e3200d6cc5ab1bd5086609af036b19ca37dd8887e14dbea9f3cb683ac59",
+   "size": 542710,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 384,
+   "height": 3072,
+   "mip": 1
+  },
+  {
+   "path": "atlas/det_L2.bin.zst",
+   "sha256": "4197be13a404898114fd21ba6dba86b2349926171e05c975ef88faac0e7b832d",
+   "size": 312682,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 192,
+   "height": 1536,
+   "mip": 2
+  },
+  {
+   "path": "atlas/det_L3.bin.zst",
+   "sha256": "2ef0e4a9a14406fbe0fb7c162ae4113acd04f78955ee0224de16b1f386dcb018",
+   "size": 101580,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 96,
+   "height": 768,
+   "mip": 3
+  },
+  {
+   "path": "atlas/det_L4.bin.zst",
+   "sha256": "c7fe2381eb04f734aad22f528974427e3fe6876e42fd004d853a849577538774",
+   "size": 26550,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 48,
+   "height": 384,
+   "mip": 4
+  },
+  {
+   "path": "atlas/pbr_L0.bin.zst",
+   "sha256": "ca6227e2089407b2dc3b7481e1ed5744adac7a81c9663bb1061ccf302f40557e",
+   "size": 409968,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 768,
+   "height": 6144,
+   "mip": 0
+  },
+  {
+   "path": "atlas/pbr_L1.bin.zst",
+   "sha256": "a94bda3d68f371c785d75f4626ab1d3848e4d4e2739d069ae3fc5687c2c2b805",
+   "size": 335100,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 384,
+   "height": 3072,
+   "mip": 1
+  },
+  {
+   "path": "atlas/pbr_L2.bin.zst",
+   "sha256": "5db0b9e63bb5b377df7afeec8d39b32a9d0f5df42f271256f8d2bdf404718484",
+   "size": 221568,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 192,
+   "height": 1536,
+   "mip": 2
+  },
+  {
+   "path": "atlas/pbr_L3.bin.zst",
+   "sha256": "e4541de8cfc4e40471b197f1b434a058e30e5a4d5f0231a26bd4e1fc68b5cb97",
+   "size": 70255,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 96,
+   "height": 768,
+   "mip": 3
+  },
+  {
+   "path": "atlas/pbr_L4.bin.zst",
+   "sha256": "96f705c51a79912adc88026ee16cd707ecf3cc68dd33dddbf63cbf56261aaadf",
+   "size": 19500,
+   "kind": "atlas",
+   "format": "rgba8unorm",
+   "width": 48,
+   "height": 384,
+   "mip": 4
+  },
+  {
    "path": "tex/fog.bin",
    "sha256": "da14cc18cf649872414fd43992019e2c60a2f557535cc508af17a64146f5ad14",
    "size": 32768,
@@ -157,6 +270,134 @@
    "sha256": "cb004f019cf547d43b280895a28d98ea354f50b5c4c715aab0ff8398d1df880d",
    "size": 8179,
    "kind": "materials"
+  },
+  {
+   "path": "mesh/0_8.bin.zst",
+   "sha256": "926b54ca5447dff258c432d6380ad2e9b148a74102312a461af0a769efc6c69b",
+   "size": 132750,
+   "kind": "mesh",
+   "tx": 0,
+   "tz": 8
+  },
+  {
+   "path": "mesh/1_8.bin.zst",
+   "sha256": "a7c882978c2f9aa61d8aefc090afc3ec683b3daaf6b7f27a79b412b1ef8312b1",
+   "size": 128992,
+   "kind": "mesh",
+   "tx": 1,
+   "tz": 8
+  },
+  {
+   "path": "mesh/2_8.bin.zst",
+   "sha256": "61c797b5185a3532a981c648c1bffe7aff9dc1588be78f5159befcad0a59b3f0",
+   "size": 73594,
+   "kind": "mesh",
+   "tx": 2,
+   "tz": 8
+  },
+  {
+   "path": "mesh/0_9.bin.zst",
+   "sha256": "c1dfc53dfbbb09b53719285f1429f16205b441e9a52ba9cbf4e14613c5716b46",
+   "size": 114313,
+   "kind": "mesh",
+   "tx": 0,
+   "tz": 9
+  },
+  {
+   "path": "mesh/1_9.bin.zst",
+   "sha256": "4a3d838e3e0e2bac704883a54839ffa71265c88eadebe1006eb105d7746f9853",
+   "size": 91338,
+   "kind": "mesh",
+   "tx": 1,
+   "tz": 9
+  },
+  {
+   "path": "mesh/2_9.bin.zst",
+   "sha256": "ef2ea94c046bd092b515f330c1b9d95a25033490b63e54ed33f92ea6292602e5",
+   "size": 105363,
+   "kind": "mesh",
+   "tx": 2,
+   "tz": 9
+  },
+  {
+   "path": "frame/ch1.bin",
+   "sha256": "cceb113ad8687af056e5e3ba76bb0b6a4bdad78212edaf0b16c65ae2c4bcbc8c",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 1,
+   "sky": "morning"
+  },
+  {
+   "path": "frame/ch2.bin",
+   "sha256": "0577bb7995c590fda72df4019e137296297c63f55629d9a9357fbe349e5ad725",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 2,
+   "sky": "day"
+  },
+  {
+   "path": "frame/ch3.bin",
+   "sha256": "0577bb7995c590fda72df4019e137296297c63f55629d9a9357fbe349e5ad725",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 3,
+   "sky": "day"
+  },
+  {
+   "path": "frame/ch4.bin",
+   "sha256": "307d20e8ff18fe9bffcdc31a16e56d0280b24c85fc82517b8ad93e5262ea3d56",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 4,
+   "sky": "overcast"
+  },
+  {
+   "path": "frame/ch5.bin",
+   "sha256": "430216b4bbd2628c1cdf84d360ade63323b1fbe62462cdc0a845ef3d0ee71641",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 5,
+   "sky": "dusk"
+  },
+  {
+   "path": "frame/ch6.bin",
+   "sha256": "cceb113ad8687af056e5e3ba76bb0b6a4bdad78212edaf0b16c65ae2c4bcbc8c",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 6,
+   "sky": "morning"
+  },
+  {
+   "path": "frame/ch7.bin",
+   "sha256": "0577bb7995c590fda72df4019e137296297c63f55629d9a9357fbe349e5ad725",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 7,
+   "sky": "day"
+  },
+  {
+   "path": "frame/ch8.bin",
+   "sha256": "5caf83b3f84128f13844ba065fa608c99d4c13d3b6322a644563a8cff60d1e7e",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 8,
+   "sky": "sunset"
+  },
+  {
+   "path": "frame/ch9.bin",
+   "sha256": "1bf36f34e254277001a67b343ca1e18faa5abbc13578cd653e70cee8b92af17b",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 9,
+   "sky": "night"
+  },
+  {
+   "path": "frame/ch10.bin",
+   "sha256": "430216b4bbd2628c1cdf84d360ade63323b1fbe62462cdc0a845ef3d0ee71641",
+   "size": 1664,
+   "kind": "frame",
+   "chapter": 10,
+   "sky": "dusk"
   }
  ],
  "bundled": true

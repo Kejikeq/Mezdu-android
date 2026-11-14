@@ -1,5 +1,6 @@
 //! wgpu device on Vulkan, falling back to GLES when Vulkan is missing or fails.
 use std::sync::Arc;
+pub mod world;
 pub use wgpu;
 
 pub struct Gfx {
@@ -57,10 +58,11 @@ impl Gfx {
             .await
             .map_err(|e| e.to_string())?;
         let info = adapter.get_info();
+        // the world bind group has 7 storage buffers and 11 textures per stage (renderer.js L0): ask for what the GPU has
         let limits = if info.backend == wgpu::Backend::Gl {
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
         } else {
-            wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+            adapter.limits()
         };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -114,7 +116,32 @@ impl Gfx {
         bad
     }
 
-    /// Stage 1 frame: clear to the sky colour.
+    fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) => Some(t),
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
+                self.surface.configure(&self.device, &self.config);
+                Some(t)
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                None
+            }
+            _ => None, // timeout / occluded: skip the frame
+        }
+    }
+
+    /// Scene frame: the world through the game's shaders, then present.
+    pub fn frame_world(&mut self, world: &mut world::World, cam: &world::Camera, time: f32) {
+        let Some(tex) = self.acquire() else { return };
+        let view = tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        world.render(&self.device, &self.queue, &mut enc, &view, self.config.width, self.config.height, cam, time);
+        self.queue.submit([enc.finish()]);
+        self.queue.present(tex);
+    }
+
+    /// Status frame: clear to a colour.
     pub fn frame(&mut self, sky: [f64; 3]) {
         let tex = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => t,
