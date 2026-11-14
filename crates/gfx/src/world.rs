@@ -474,8 +474,8 @@ impl World {
 
         self.calls = 0;
         self.shadow_passes = 0;
-        for k in 0..2 {
-            if !redo[k] {
+        for (k, &again) in redo.iter().enumerate() {
+            if !again {
                 continue;
             }
             let cs = &self.casc[k];
