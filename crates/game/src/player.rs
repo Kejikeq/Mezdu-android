@@ -1,4 +1,4 @@
-//! Third-person controller and orbit camera: src/game/player.js (Player.update, collides, updateCamera).
+//! Third-person controller and over-the-shoulder camera: src/game/player.js (Player.update, collides, updateCamera).
 use crate::voxels::{Voxels, F_LEAF, F_SOLID};
 
 const HW: f32 = 0.27;
@@ -30,9 +30,10 @@ pub struct Player {
     pub cam_target: [f32; 3],
     pub indoor: bool,
     bounds: [f32; 4],
-    // whisker state of the camera probe (player.js _cWant / _cR)
-    c_want: f32,
-    c_r: f32,
+    shoulder_cur: f32,
+    cam_hold: f32,
+    cam_tight: f32,
+    look_idle: f32,
     tgt: [f32; 3],
     dir: [f32; 3],
 }
@@ -62,8 +63,10 @@ impl Player {
             cam_target: [0.0; 3],
             indoor: false,
             bounds: [2.0, w.wx as f32 * w.vs - 2.0, 2.0, w.wz as f32 * w.vs - 2.0],
-            c_want: 4.2,
-            c_r: 0.22,
+            shoulder_cur: 0.66,
+            cam_hold: 0.0,
+            cam_tight: 0.0,
+            look_idle: 0.0,
             tgt: [0.0; 3],
             dir: [0.0; 3],
         }
@@ -212,63 +215,80 @@ impl Player {
         fl & F_SOLID != 0 && fl & F_LEAF == 0
     }
 
-    fn cam_obstacle(&self, w: &Voxels, t: f32) -> bool {
-        let (tg, d, r) = (self.tgt, self.dir, self.c_r);
-        let (mx, my, mz) = (tg[0] + d[0] * t, tg[1] + d[1] * t + 0.10 * (t / self.c_want.max(1.0)), tg[2] + d[2] * t);
-        let s = |x, y, z| Self::cam_solid(w, x, y, z);
-        s(mx, my, mz) || s(mx + r, my, mz) || s(mx - r, my, mz) || s(mx, my, mz + r) || s(mx, my, mz - r) || s(mx, my + r * 0.85, mz) || s(mx, my - r * 0.85, mz)
+    /// first solid voxel (not foliage) on the thin line from the pivot along the boom (player.js _boomHit)
+    fn boom_hit(&self, w: &Voxels, max_t: f32) -> Option<f32> {
+        let (tg, d) = (self.tgt, self.dir);
+        let mut t = 0.1;
+        while t <= max_t {
+            if Self::cam_solid(w, tg[0] + d[0] * t, tg[1] + d[1] * t, tg[2] + d[2] * t) {
+                return Some(t);
+            }
+            t += 0.04;
+        }
+        None
     }
 
-    /// over-the-shoulder orbit camera with whisker collision (player.js updateCamera)
+    /// Over-the-shoulder camera (player.js updateCamera): the pivot slides from the right shoulder to the centre when
+    /// a wall is beside the hero, only the thin line of sight shortens the boom, walls beside the camera push it
+    /// sideways, the boom grows back after a short hold, and in tight spaces it swings behind the walking hero.
     pub fn update_camera(&mut self, dt: f32, inp: &Input, w: &Voxels, portrait: bool) {
         let tau = std::f32::consts::TAU;
+        let looked = inp.look[0].abs() + inp.look[1].abs() > 0.5;
         self.cam_yaw = (self.cam_yaw - inp.look[0] * 0.0042).rem_euclid(tau);
         self.cam_pitch = (self.cam_pitch + inp.look[1] * 0.0036).clamp(-0.55, 1.25);
+        self.look_idle = if looked { 0.0 } else { self.look_idle + dt };
         let p = self.pos;
-        let head = 1.38;
+        self.indoor = [2.4, 3.4, 3.8, 4.2].iter().any(|&h| Self::cam_solid(w, p[0], p[1] + h, p[2]));
+        if self.cam_tight > 0.3 && self.speed > 0.6 && self.look_idle > 1.0 {
+            let d = (self.yaw - self.cam_yaw).sin().atan2((self.yaw - self.cam_yaw).cos());
+            self.cam_yaw += d * (dt * 1.6 * self.cam_tight).min(1.0);
+        }
         let (rx, rz) = (-self.cam_yaw.cos(), self.cam_yaw.sin());
-        let mut shoulder = if portrait { 0.72 } else { 0.66 };
-        let base_y = self.vis_y + head;
-        let mut s = 0.12;
-        while s <= shoulder {
-            if Self::cam_solid(w, p[0] + rx * s, base_y, p[2] + rz * s) || Self::cam_solid(w, p[0] + rx * (s + 0.1), base_y, p[2] + rz * (s + 0.1)) {
-                shoulder = (s - 0.08).max(0.24);
+        let mut shoulder_want: f32 = if portrait { 0.72 } else { 0.66 };
+        let base_y = self.vis_y + 1.38;
+        let mut s = 0.08;
+        while s <= shoulder_want + 0.2 {
+            if Self::cam_solid(w, p[0] + rx * s, base_y, p[2] + rz * s) {
+                shoulder_want = (s - 0.24).max(0.0);
                 break;
             }
-            s += 0.08;
+            s += 0.06;
         }
-        self.tgt = [p[0] + rx * shoulder, base_y, p[2] + rz * shoulder];
+        let k = if shoulder_want < self.shoulder_cur { 14.0 } else { 4.0 };
+        self.shoulder_cur += (shoulder_want - self.shoulder_cur) * (dt * k).min(1.0);
+        self.tgt = [p[0] + rx * self.shoulder_cur, base_y, p[2] + rz * self.shoulder_cur];
         let (cp, sp) = (self.cam_pitch.cos(), self.cam_pitch.sin());
         self.dir = [-self.cam_yaw.sin() * cp, sp, -self.cam_yaw.cos() * cp];
-        // a ceiling 2.4 .. 4.2 m above the feet (the ground floor of the chapter 1 house is 3.75 m high)
-        self.indoor = [2.4, 3.4, 3.8, 4.2].iter().any(|&h| Self::cam_solid(w, p[0], p[1] + h, p[2]));
-        let want = if self.indoor { 2.85 } else { self.cam_dist } * if portrait { 1.08 } else { 1.0 };
-        let mut d = want;
-        self.c_want = want;
-        self.c_r = if self.indoor { 0.15 } else { 0.22 };
-        let (mut prev, mut t) = (0.10f32, 0.12f32);
-        while t <= want {
-            if self.cam_obstacle(w, t) {
-                let (mut lo, mut hi) = (prev, t);
-                for _ in 0..5 {
-                    let mid = (lo + hi) * 0.5;
-                    if self.cam_obstacle(w, mid) {
-                        hi = mid;
-                    } else {
-                        lo = mid;
-                    }
-                }
-                d = (lo - 0.08).max(0.35);
-                break;
+        let want = if self.indoor { 2.4 } else { self.cam_dist } * if portrait { 1.08 } else { 1.0 };
+        let hit = self.boom_hit(w, want + 0.2);
+        let d = hit.map_or(want, |h| (h - 0.18).min(want).max(0.45));
+        self.cam_tight = if hit.is_some() { (1.0 - d / want).clamp(0.0, 1.0) } else { 0.0 };
+        if d < self.cam_dist_cur {
+            self.cam_hold = 0.35;
+            self.cam_dist_cur += (d - self.cam_dist_cur) * (dt * 18.0).min(1.0);
+        } else {
+            self.cam_hold = (self.cam_hold - dt).max(0.0);
+            if self.cam_hold <= 0.0 {
+                self.cam_dist_cur += (d - self.cam_dist_cur) * (dt * 3.5).min(1.0);
             }
-            prev = t;
-            t += 0.08;
         }
-        let k = if d < self.cam_dist_cur { 22.0 } else { 6.0 };
-        self.cam_dist_cur += (d - self.cam_dist_cur) * (dt * k).min(1.0);
         let dd = self.cam_dist_cur;
-        let lift = 0.10 * (dd / 2.2).min(1.0);
-        self.cam_target = self.tgt;
-        self.cam_pos = [self.tgt[0] + self.dir[0] * dd, self.tgt[1] + self.dir[1] * dd + lift, self.tgt[2] + self.dir[2] * dd];
+        let lift = 0.10 * (dd / 2.2).min(1.0) + 0.18 * (1.0 - dd / 1.2).max(0.0);
+        let (tg, dr) = (self.tgt, self.dir);
+        let (mut cx, mut cy, mut cz) = (tg[0] + dr[0] * dd, tg[1] + dr[1] * dd + lift, tg[2] + dr[2] * dd);
+        let r = 0.2;
+        let sol = |x: f32, y: f32, z: f32| Self::cam_solid(w, x, y, z);
+        if sol(cx + rx * r, cy, cz + rz * r) && !sol(cx - rx * r, cy, cz - rz * r) {
+            cx -= rx * r * 0.7;
+            cz -= rz * r * 0.7;
+        } else if sol(cx - rx * r, cy, cz - rz * r) && !sol(cx + rx * r, cy, cz + rz * r) {
+            cx += rx * r * 0.7;
+            cz += rz * r * 0.7;
+        }
+        if sol(cx, cy + r, cz) {
+            cy -= r * 0.6;
+        }
+        self.cam_target = tg;
+        self.cam_pos = [cx, cy, cz];
     }
 }
