@@ -54,6 +54,9 @@ pub struct World {
     p_shadow_leaf: wgpu::RenderPipeline,
     p_comp: wgpu::RenderPipeline,
     p_ao: wgpu::RenderPipeline,
+    p_vol: wgpu::RenderPipeline,
+    /// the volume texture holds this size's fog (renderer.js volFresh)
+    vol_fresh: bool,
     p_ssr: wgpu::RenderPipeline,
     ao_u: wgpu::Buffer,
     ssr_u: wgpu::Buffer,
@@ -114,7 +117,6 @@ impl Bg0Res {
 
 /// the inputs of fsComp that are not render targets of this frame
 struct CompRes {
-    vol: wgpu::TextureView,
     dof: wgpu::TextureView,
     lut: wgpu::TextureView,
     lin_smp: wgpu::Sampler,
@@ -132,6 +134,8 @@ struct Targets {
     ao: wgpu::TextureView,
     ssr: wgpu::TextureView,
     ao_bg: wgpu::BindGroup,
+    vol: wgpu::TextureView,
+    vol_bg: wgpu::BindGroup,
     ssr_bg: wgpu::BindGroup,
 }
 
@@ -187,6 +191,7 @@ impl World {
         let pf = m.per_frame.ok_or("pack has no perFrame (old export)")?;
         let mut frame = f32s(&pack.read(&format!("frame/ch{chapter}.bin"))?);
         frame[134] = 0.75 / SHADOW_SIZE as f32; // grade.z: shadow texel
+        frame[142] = f32::from_bits(10); // counts.z (u32): volumetric fog steps (0 = plain distance fog in the shaders)
         frame[143] = f32::from_bits(1); // counts.w (u32): shadows on
         let tb = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let ra = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
@@ -432,16 +437,18 @@ impl World {
         let p_ssr = full("ssr", &ssrm, "fsSsr", None, &[Some(HDR.into())]);
         let ao_u = d.create_buffer(&wgpu::BufferDescriptor { label: Some("ao u"), size: 16, usage: ub, mapped_at_creation: false });
         let ssr_u = d.create_buffer(&wgpu::BufferDescriptor { label: Some("ssr u"), size: 16, usage: ub, mapped_at_creation: false });
+        // volumetric fog and light shafts at half resolution, every second frame (QUALITY vol 10, volHalf)
+        let volm = module(d, pack, "vol")?;
+        let p_vol = full("vol", &volm, "fsVol", None, &[Some(HDR.into())]);
         let compm = module(d, pack, "comp")?;
         let p_comp = full("comp", &compm, "fsComp", None, &[Some(surface_format.into()), Some(HDR.into())]);
-        // no volumetric light yet: transmittance 1, nothing scattered; no depth of field
+        // no depth of field yet
         let black = |label: &str, px: [u8; 4]| {
             let t = tex(d, label, ext(1, 1, 1), wgpu::TextureDimension::D2, wgpu::TextureFormat::Rgba8Unorm, 1, tb);
             upload(q, &t, 0, &px, 4, 1, ext(1, 1, 1));
             t.create_view(&Default::default())
         };
         let comp_res = CompRes {
-            vol: black("vol", [0, 0, 0, 255]),
             dof: black("dof", [0, 0, 0, 0]),
             lut: lutv.clone(),
             lin_smp: d.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() }),
@@ -466,6 +473,8 @@ impl World {
             p_comp,
             p_ao,
             p_ssr,
+            p_vol,
+            vol_fresh: false,
             ao_u,
             ssr_u,
             res0,
@@ -499,13 +508,23 @@ impl World {
         let mk = |label: &str, f: wgpu::TextureFormat| tex(d, label, ext(w, h, 1), wgpu::TextureDimension::D2, f, 1, u).create_view(&Default::default());
         let (hdr, gbuf, depth) = (mk("scene", HDR), mk("gbuf", GBUF), mk("depth", DEPTH));
         let hist = [mk("hist 0", HDR), mk("hist 1", HDR)];
+        let vol = tex(d, "vol", ext((w >> 1).max(1), (h >> 1).max(1), 1), wgpu::TextureDimension::D2, HDR, 1, u).create_view(&Default::default());
         let r = &self.comp_res;
+        let vol_bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg_vol"),
+            layout: &self.p_vol.get_bind_group_layout(0),
+            entries: &[
+                be(0, buf(&self.frame_buf)), be(1, tv(&self.shadow[1])), be(2, wgpu::BindingResource::Sampler(&self.res0.shadow_smp)),
+                be(3, tv(&depth)), be(4, tv(&self.res0.views[1])), be(5, wgpu::BindingResource::Sampler(&self.res0.rep_smp)),
+            ],
+        });
+        self.vol_fresh = false;
         let comp_bg = [1, 0].map(|read: usize| {
             d.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("bg_comp"),
                 layout: &self.p_comp.get_bind_group_layout(0),
                 entries: &[
-                    be(0, buf(&self.frame_buf)), be(1, tv(&hdr)), be(2, tv(&r.vol)), be(3, tv(&depth)), be(4, wgpu::BindingResource::Sampler(&r.lin_smp)),
+                    be(0, buf(&self.frame_buf)), be(1, tv(&hdr)), be(2, tv(&vol)), be(3, tv(&depth)), be(4, wgpu::BindingResource::Sampler(&r.lin_smp)),
                     be(7, tv(&r.dof)), be(8, tv(&hist[read])), be(9, tv(&gbuf)), be(10, tv(&r.lut)),
                 ],
             })
@@ -528,7 +547,7 @@ impl World {
         });
         self.bg0 = self.res0.make(d, "bg_world", &self.frame_buf, &self.shadow[0], &self.shadow[1], &self.res0.bufs[3], &ao, &ssr);
         self.ss_valid = false;
-        self.targets = Some(Targets { w, h, hdr, gbuf, depth, hist, comp_bg, ao, ssr, ao_bg, ssr_bg });
+        self.targets = Some(Targets { w, h, hdr, gbuf, depth, hist, comp_bg, ao, ssr, ao_bg, ssr_bg, vol, vol_bg });
     }
 
     /// renderer.js updateCascade: an orthographic box around `center`, snapped to a grid and to the texels;
@@ -768,6 +787,17 @@ impl World {
             p.draw(0..3, 0..1);
         }
         self.ss_valid = true;
+        if !self.vol_fresh || self.frame_no & 1 == 0 {
+            let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("vol"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &t.vol, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }), store: wgpu::StoreOp::Store } })],
+                ..Default::default()
+            });
+            p.set_pipeline(&self.p_vol);
+            p.set_bind_group(0, &t.vol_bg, &[]);
+            p.draw(0..3, 0..1);
+            self.vol_fresh = true;
+        }
         let hk = (self.frame_no & 1) as usize;
         self.hist_valid = true;
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
