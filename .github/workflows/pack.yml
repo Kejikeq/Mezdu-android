@@ -14,14 +14,14 @@ jobs:
     steps:
       - name: token check
         env:
-          T: ${{ secrets.GAME_REPO_TOKEN }}
-        run: '[ -n "$T" ] || { echo "::error::add secret GAME_REPO_TOKEN (read access to Kejikeq/-)"; exit 1; }'
+          T: ${{ secrets.GAME_REPO_TOKEN || secrets.MEZDU }}
+        run: '[ -n "$T" ] || { echo "::error::add secret GAME_REPO_TOKEN (or MEZDU: a token with read access to Kejikeq/-)"; exit 1; }'
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: Kejikeq/-
           ref: main
-          token: ${{ secrets.GAME_REPO_TOKEN }}
+          token: ${{ secrets.GAME_REPO_TOKEN || secrets.MEZDU }}
           path: game
       - name: up to date?
         id: cmp
