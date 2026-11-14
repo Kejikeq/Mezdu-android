@@ -53,6 +53,8 @@ pub struct World {
     p_shadow: wgpu::RenderPipeline,
     p_shadow_leaf: wgpu::RenderPipeline,
     p_comp: wgpu::RenderPipeline,
+    p_grass: Option<wgpu::RenderPipeline>,
+    grass_quads: u32,
     props: Option<Props>,
     bg_model: Option<wgpu::BindGroup>,
     p_prop: wgpu::RenderPipeline,
@@ -271,7 +273,14 @@ impl World {
         let quads = (fw.len() / 3) as u32;
         let faces_buf = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("faces"), contents: &fw.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>(), usage: sb });
         let props = Props::new(d, pack)?;
-        let max_draw = draws.iter().map(|d| d.opaque.max(d.leaves)).max().unwrap_or(0).max(props.as_ref().map_or(1, |p| p.max_quads)).max(1);
+        // grass: one draw of N x N cells x B blades (frame.grass = N, B, R), the map as renderer.js gcol
+        let gcol = if m.files.iter().any(|f| f.kind == "grass") {
+            Some(d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("gcol"), contents: &pack.read_data("grass.bin.zst")?, usage: sb }))
+        } else {
+            None
+        };
+        let grass_quads = if gcol.is_some() { (frame[240] * frame[240] * frame[241]) as u32 } else { 0 };
+        let max_draw = draws.iter().map(|d| d.opaque.max(d.leaves)).max().unwrap_or(0).max(props.as_ref().map_or(1, |p| p.max_quads)).max(grass_quads).max(1);
         let idx: Vec<u8> = (0..max_draw).flat_map(|q| { let b = q * 4; [b, b + 1, b + 2, b, b + 2, b + 3] }).flat_map(|i| i.to_le_bytes()).collect();
         let idx = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("quad idx"), contents: &idx, usage: wgpu::BufferUsages::INDEX });
 
@@ -311,7 +320,7 @@ impl World {
                 entries: &[
                     be(0, buf(fb)), be(1, tv(s0)), be(2, wgpu::BindingResource::Sampler(&shadow_smp)), be(3, buf(&mats)),
                     be(4, buf(&chunk_org)), be(5, buf(minfo)), be(6, buf(mfaces)), be(7, buf(insts)), be(8, buf(vis)),
-                    be(9, buf(&dummy_sb)), be(10, tv(&atlas[0])), be(11, buf(&dummy_sb)), be(12, tv(&noisev)),
+                    be(9, buf(&dummy_sb)), be(10, tv(&atlas[0])), be(11, buf(gcol.as_ref().unwrap_or(&dummy_sb))), be(12, tv(&noisev)),
                     be(13, wgpu::BindingResource::Sampler(&rep_smp)), be(14, tv(&lutv)), be(15, tv(&atlas[1])),
                     be(16, tv(&env_views[0])), be(17, tv(&env_views[1])), be(18, tv(&brdfv)), be(19, tv(s1)), be(20, tv(&whitev)), be(21, tv(&whitev)),
                 ],
@@ -358,6 +367,8 @@ impl World {
             })
         };
         let pipe = |label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| pipe_l(&layout, label, vs, fs, cull, shadow);
+        let lay_part = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layPart"), bind_group_layouts: &[Some(&l0)], immediate_size: 0 });
+        let p_grass = (grass_quads > 0).then(|| pipe_l(&lay_part, "grass", "vsGrass", Some("fsGrass"), None, false));
         let p_prop = pipe_l(&lay_p, "props0", "vsProp", Some("fsProp"), Some(wgpu::Face::Back), false);
         let p_tree = pipe_l(&lay_p, "tree0", "vsProp", Some("fsTree"), None, false);
         let p_prop_shadow = pipe_l(&lay_p, "propShadow", "vsPropShadow", Some("fsPropShadow"), None, true);
@@ -398,6 +409,8 @@ impl World {
             p_shadow,
             p_shadow_leaf,
             p_comp,
+            p_grass,
+            grass_quads,
             instances: props.as_ref().map_or(0, |p| p.count.len() as u32),
             props,
             bg_model,
@@ -601,6 +614,12 @@ impl World {
                     p.draw_indexed(0..dr.opaque * 6, (dr.base * 4) as i32, 0..1);
                     self.calls += 1;
                 }
+            }
+            // grass and particles are single draws of N quads, as renderer.js mainPass
+            if let Some(pg) = &self.p_grass {
+                p.set_pipeline(pg);
+                p.draw_indexed(0..self.grass_quads * 6, 0, 0..1);
+                self.calls += 1;
             }
             p.set_pipeline(&self.p_leaf);
             for dr in &self.draws {
