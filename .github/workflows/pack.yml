@@ -43,7 +43,17 @@ jobs:
         run: |
           node game/tools/export-native.mjs "$PWD/pack"
           cargo run --release -p mezdu-core --bin packcheck -- pack
+          python3 tools/bundle_pack.py pack app/src/main/assets/pack
           mkdir flat && (cd pack && find . -type f | sed 's|^\./||' | while read f; do cp "$f" "../flat/${f//\//__}"; done)
+      - name: commit bundled pack to main
+        if: steps.cmp.outputs.skip != '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/pack
+          if git diff --cached --quiet; then echo "bundled pack unchanged"; exit 0; fi
+          git commit -m "build: bundled pack $(git -C game rev-parse --short HEAD)"
+          for i in 1 2 3; do git pull --rebase -q origin main && git push origin HEAD:main && break; sleep 5; done
       - uses: softprops/action-gh-release@v2
         if: steps.cmp.outputs.skip != '1'
         with:

@@ -1,5 +1,6 @@
 //! wgpu device on Vulkan, falling back to GLES when Vulkan is missing or fails.
 use std::sync::Arc;
+pub use wgpu;
 
 pub struct Gfx {
     pub surface: wgpu::Surface<'static>,

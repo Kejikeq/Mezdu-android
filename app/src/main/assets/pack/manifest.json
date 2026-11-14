@@ -1,0 +1,163 @@
+{
+ "format": 1,
+ "version": "v2.0.0",
+ "commit": "a2e7a700876c6e613e786125e51b3f5e49e1f1c4",
+ "created": "2026-11-14T15:23:16.011Z",
+ "constants": {
+  "VS": 0.125,
+  "WX": 1536,
+  "WY": 128,
+  "WZ": 2560,
+  "CS": 32,
+  "SHIFT_Z": 256,
+  "SEED": 20261105,
+  "TILE": 64,
+  "ATLAS_W": 768,
+  "ATLAS_H": 6144,
+  "ATLAS_MIPS": 5,
+  "MAX_MAT": 96,
+  "WORLD_TILE": 256,
+  "flags": {
+   "SOLID": 1,
+   "OPAQUE": 2,
+   "LEAF": 4,
+   "WATER": 8,
+   "EMIT": 16,
+   "GLOSS": 32,
+   "GLYPH": 64,
+   "HAZARD": 128
+  }
+ },
+ "files": [
+  {
+   "path": "shaders/ao.wgsl",
+   "sha256": "202e6068d8c2927930280dcf70ffaaeb58b53f009623270c0b3eaa179fac4a33",
+   "size": 6109,
+   "kind": "shader",
+   "name": "AO_SHADER"
+  },
+  {
+   "path": "shaders/bug.wgsl",
+   "sha256": "7da8271889e5d729a588e2112b8f44018e08ae4a9c3a703d70a9e41c90e94da9",
+   "size": 6787,
+   "kind": "shader",
+   "name": "BUG_SHADER"
+  },
+  {
+   "path": "shaders/comp.wgsl",
+   "sha256": "4fe7cf762bf1eb90bf88c862f44ea9add91f65743f5981f92532da4dc1d20bd6",
+   "size": 23896,
+   "kind": "shader",
+   "name": "COMP_SHADER"
+  },
+  {
+   "path": "shaders/cull.wgsl",
+   "sha256": "0f60555f14bee76fb19ff10f5833947d9b3e1e6e76751180bfe76eeb2b076b3f",
+   "size": 7149,
+   "kind": "shader",
+   "name": "CULL_SHADER"
+  },
+  {
+   "path": "shaders/env.wgsl",
+   "sha256": "0954b9e94573c75151119bbcf735c31ffc3115dc8ed84c457fb64ce8419d2706",
+   "size": 5879,
+   "kind": "shader",
+   "name": "ENV_SHADER"
+  },
+  {
+   "path": "shaders/exposure.wgsl",
+   "sha256": "e3d82a92f7de7de7934c60eb907ed28e640ff7c6bf54ee3e4c539bf1e88e113b",
+   "size": 1569,
+   "kind": "shader",
+   "name": "EXPOSURE_SHADER"
+  },
+  {
+   "path": "shaders/preview.wgsl",
+   "sha256": "8f248b225477d6d2a9aa61cc84952dd01a99be3e4a48044ae3c4bd2181e6e22b",
+   "size": 3462,
+   "kind": "shader",
+   "name": "PREVIEW_SHADER"
+  },
+  {
+   "path": "shaders/rig.wgsl",
+   "sha256": "2d93f708db6989f0dc5c8b49b7cf7841b12f1699b5f9e4bb2ea25c760ebf764e",
+   "size": 11381,
+   "kind": "shader",
+   "name": "RIG_SHADER"
+  },
+  {
+   "path": "shaders/sim.wgsl",
+   "sha256": "9b494dd4e7a74885a70e635bc972b5fb3017e1755b9a85237cc1f6c31407c0d5",
+   "size": 7733,
+   "kind": "shader",
+   "name": "SIM_SHADER"
+  },
+  {
+   "path": "shaders/ssr.wgsl",
+   "sha256": "92d630d42ba98b7ef0f7583d254add8d2d5604c3ecc4ef4fee5c01800d37e79e",
+   "size": 6109,
+   "kind": "shader",
+   "name": "SSR_SHADER"
+  },
+  {
+   "path": "shaders/taa.wgsl",
+   "sha256": "57963341ee7758fef9c1df993c6f0f4bc550e45352cc8d0f8a4fa96843221d05",
+   "size": 4365,
+   "kind": "shader",
+   "name": "TAA_SHADER"
+  },
+  {
+   "path": "shaders/vol.wgsl",
+   "sha256": "e6e43450e8acf08b0b71f77180fdc1117067a3db179596b58d31f4b885ee1f11",
+   "size": 8209,
+   "kind": "shader",
+   "name": "VOL_SHADER"
+  },
+  {
+   "path": "shaders/voxel_cull.wgsl",
+   "sha256": "fa48469a4a42b52d82b08e203fd3b231f9b091873a1be6994398393fbcafa4fb",
+   "size": 5331,
+   "kind": "shader",
+   "name": "VOXEL_CULL_SHADER"
+  },
+  {
+   "path": "shaders/world.wgsl",
+   "sha256": "198f8c9b363e2e857ed418ad1c00a362b9575f88872c7de902b415da4d867651",
+   "size": 76569,
+   "kind": "shader",
+   "name": "WORLD_SHADER"
+  },
+  {
+   "path": "tex/fog.bin",
+   "sha256": "da14cc18cf649872414fd43992019e2c60a2f557535cc508af17a64146f5ad14",
+   "size": 32768,
+   "kind": "tex",
+   "note": "bakeFogNoise(32)",
+   "elements": 32768,
+   "type": "Uint8Array"
+  },
+  {
+   "path": "tex/lut.bin",
+   "sha256": "7918b265cd96889306c111e8bac2b9bd2d8fe2f8900d78fc33198c4997c796c8",
+   "size": 16384,
+   "kind": "tex",
+   "note": "bakeColorLUT(16)",
+   "elements": 16384,
+   "type": "Uint8Array"
+  },
+  {
+   "path": "materials.bin",
+   "sha256": "07eafebf8d7e553ba6cdcef43d6ab20b5bcc36b971824dbfe071b1999c662323",
+   "size": 8192,
+   "kind": "materials",
+   "layout": "256 x [r,g,b (linear), flags|metal4<<8|porosity4<<12, emit, vary, roughness, pattern] f32"
+  },
+  {
+   "path": "materials.json",
+   "sha256": "cb004f019cf547d43b280895a28d98ea354f50b5c4c715aab0ff8398d1df880d",
+   "size": 8179,
+   "kind": "materials"
+  }
+ ],
+ "bundled": true
+}

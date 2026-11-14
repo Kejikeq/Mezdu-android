@@ -1,0 +1,674 @@
+[
+ {
+  "id": 0,
+  "name": "AIR",
+  "color": 0,
+  "flags": 0,
+  "pat": 0
+ },
+ {
+  "id": 1,
+  "name": "GRASS",
+  "color": 7240244,
+  "flags": 3,
+  "pat": 1
+ },
+ {
+  "id": 2,
+  "name": "GRASS2",
+  "color": 9079872,
+  "flags": 3,
+  "pat": 1
+ },
+ {
+  "id": 3,
+  "name": "DIRT",
+  "color": 6180928,
+  "flags": 3,
+  "pat": 2
+ },
+ {
+  "id": 4,
+  "name": "PATH",
+  "color": 9209466,
+  "flags": 3,
+  "pat": 12
+ },
+ {
+  "id": 5,
+  "name": "STONE",
+  "color": 9079426,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 6,
+  "name": "STONE_DARK",
+  "color": 6710879,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 7,
+  "name": "MOSS",
+  "color": 6978092,
+  "flags": 3,
+  "pat": 14
+ },
+ {
+  "id": 8,
+  "name": "SAND",
+  "color": 11051146,
+  "flags": 3,
+  "pat": 11
+ },
+ {
+  "id": 9,
+  "name": "BARK",
+  "color": 6048828,
+  "flags": 3,
+  "pat": 4
+ },
+ {
+  "id": 10,
+  "name": "BIRCH",
+  "color": 13814974,
+  "flags": 3,
+  "pat": 5
+ },
+ {
+  "id": 11,
+  "name": "LEAF",
+  "color": 6189104,
+  "flags": 7,
+  "pat": 6
+ },
+ {
+  "id": 12,
+  "name": "LEAF2",
+  "color": 8292922,
+  "flags": 7,
+  "pat": 6
+ },
+ {
+  "id": 13,
+  "name": "BLOSSOM",
+  "color": 15906506,
+  "flags": 7,
+  "pat": 6
+ },
+ {
+  "id": 14,
+  "name": "PINE",
+  "color": 4083768,
+  "flags": 7,
+  "pat": 16
+ },
+ {
+  "id": 15,
+  "name": "WATER",
+  "color": 7244438,
+  "flags": 136,
+  "pat": 0
+ },
+ {
+  "id": 16,
+  "name": "PLANK",
+  "color": 9073240,
+  "flags": 3,
+  "pat": 7
+ },
+ {
+  "id": 17,
+  "name": "BEAM",
+  "color": 5521454,
+  "flags": 3,
+  "pat": 24
+ },
+ {
+  "id": 18,
+  "name": "ROOF",
+  "color": 8018504,
+  "flags": 3,
+  "pat": 9
+ },
+ {
+  "id": 19,
+  "name": "PLASTER",
+  "color": 13946300,
+  "flags": 3,
+  "pat": 8
+ },
+ {
+  "id": 20,
+  "name": "WINDOW",
+  "color": 5130816,
+  "flags": 7,
+  "pat": 21
+ },
+ {
+  "id": 21,
+  "name": "BRICK",
+  "color": 9063482,
+  "flags": 3,
+  "pat": 10
+ },
+ {
+  "id": 22,
+  "name": "STONE_RED",
+  "color": 13125180,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 23,
+  "name": "STONE_BLUE",
+  "color": 4157380,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 24,
+  "name": "STONE_YELLOW",
+  "color": 14727226,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 25,
+  "name": "STONE_GREEN",
+  "color": 5219162,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 26,
+  "name": "LANTERN",
+  "color": 16764794,
+  "flags": 19,
+  "pat": 0
+ },
+ {
+  "id": 27,
+  "name": "RUG",
+  "color": 9060159,
+  "flags": 3,
+  "pat": 23
+ },
+ {
+  "id": 28,
+  "name": "HEARTH",
+  "color": 5920082,
+  "flags": 3,
+  "pat": 10
+ },
+ {
+  "id": 29,
+  "name": "FIRE",
+  "color": 16751168,
+  "flags": 19,
+  "pat": 0
+ },
+ {
+  "id": 30,
+  "name": "MOSAIC_A",
+  "color": 5148607,
+  "flags": 3,
+  "pat": 13
+ },
+ {
+  "id": 31,
+  "name": "MOSAIC_B",
+  "color": 15255642,
+  "flags": 3,
+  "pat": 13
+ },
+ {
+  "id": 32,
+  "name": "MOSAIC_C",
+  "color": 5940330,
+  "flags": 3,
+  "pat": 13
+ },
+ {
+  "id": 33,
+  "name": "MOSAIC_D",
+  "color": 14121578,
+  "flags": 3,
+  "pat": 13
+ },
+ {
+  "id": 34,
+  "name": "MOSAIC_E",
+  "color": 15920864,
+  "flags": 3,
+  "pat": 13
+ },
+ {
+  "id": 35,
+  "name": "BRAMBLE",
+  "color": 3951914,
+  "flags": 7,
+  "pat": 20
+ },
+ {
+  "id": 36,
+  "name": "FLOOR",
+  "color": 8275506,
+  "flags": 3,
+  "pat": 7
+ },
+ {
+  "id": 37,
+  "name": "CLIFF",
+  "color": 8223603,
+  "flags": 3,
+  "pat": 15
+ },
+ {
+  "id": 38,
+  "name": "GRAVEL",
+  "color": 10130052,
+  "flags": 3,
+  "pat": 11
+ },
+ {
+  "id": 39,
+  "name": "DOOR",
+  "color": 9133624,
+  "flags": 3,
+  "pat": 22
+ },
+ {
+  "id": 40,
+  "name": "LIGHTWALL",
+  "color": 16774888,
+  "flags": 19,
+  "pat": 0
+ },
+ {
+  "id": 41,
+  "name": "IRON",
+  "color": 3815998,
+  "flags": 3,
+  "pat": 19
+ },
+ {
+  "id": 42,
+  "name": "ASPHALT",
+  "color": 4934218,
+  "flags": 3,
+  "pat": 26
+ },
+ {
+  "id": 43,
+  "name": "ROADMARK",
+  "color": 14078400,
+  "flags": 3,
+  "pat": 26
+ },
+ {
+  "id": 44,
+  "name": "BALLAST",
+  "color": 9143676,
+  "flags": 3,
+  "pat": 11
+ },
+ {
+  "id": 45,
+  "name": "CLAY",
+  "color": 10182724,
+  "flags": 3,
+  "pat": 15
+ },
+ {
+  "id": 46,
+  "name": "LOAM",
+  "color": 11966303,
+  "flags": 3,
+  "pat": 15
+ },
+ {
+  "id": 47,
+  "name": "TILLED",
+  "color": 3878954,
+  "flags": 3,
+  "pat": 2
+ },
+ {
+  "id": 48,
+  "name": "STUBBLE",
+  "color": 12034652,
+  "flags": 3,
+  "pat": 17
+ },
+ {
+  "id": 49,
+  "name": "MUD",
+  "color": 5194551,
+  "flags": 3,
+  "pat": 2
+ },
+ {
+  "id": 50,
+  "name": "CONCRETE",
+  "color": 10131599,
+  "flags": 3,
+  "pat": 27
+ },
+ {
+  "id": 51,
+  "name": "PAINT_GREEN",
+  "color": 5600090,
+  "flags": 3,
+  "pat": 28
+ },
+ {
+  "id": 52,
+  "name": "PAINT_BLUE",
+  "color": 7311011,
+  "flags": 3,
+  "pat": 28
+ },
+ {
+  "id": 53,
+  "name": "PAINT_OCHRE",
+  "color": 11897404,
+  "flags": 3,
+  "pat": 28
+ },
+ {
+  "id": 54,
+  "name": "BRICK_SILICATE",
+  "color": 13617851,
+  "flags": 3,
+  "pat": 10
+ },
+ {
+  "id": 55,
+  "name": "PLASTER_YELLOW",
+  "color": 14269810,
+  "flags": 3,
+  "pat": 8
+ },
+ {
+  "id": 56,
+  "name": "SLATE",
+  "color": 9211786,
+  "flags": 3,
+  "pat": 29
+ },
+ {
+  "id": 57,
+  "name": "TILE",
+  "color": 14212306,
+  "flags": 3,
+  "pat": 30
+ },
+ {
+  "id": 58,
+  "name": "ZINC",
+  "color": 11120046,
+  "flags": 3,
+  "pat": 31
+ },
+ {
+  "id": 59,
+  "name": "SLEEPER",
+  "color": 4010281,
+  "flags": 3,
+  "pat": 24
+ },
+ {
+  "id": 60,
+  "name": "DEAD_GRASS",
+  "color": 6776398,
+  "flags": 3,
+  "pat": 17
+ },
+ {
+  "id": 61,
+  "name": "DEAD_DIRT",
+  "color": 4865587,
+  "flags": 3,
+  "pat": 2
+ },
+ {
+  "id": 62,
+  "name": "NSTONE",
+  "color": 5591887,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 63,
+  "name": "NBARK",
+  "color": 2893347,
+  "flags": 3,
+  "pat": 4
+ },
+ {
+  "id": 64,
+  "name": "DEAD_LEAF",
+  "color": 5982771,
+  "flags": 7,
+  "pat": 6
+ },
+ {
+  "id": 65,
+  "name": "CHAR",
+  "color": 2301210,
+  "flags": 3,
+  "pat": 18
+ },
+ {
+  "id": 66,
+  "name": "RUIN",
+  "color": 5064516,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 67,
+  "name": "RED_GLOW",
+  "color": 16726566,
+  "flags": 19,
+  "pat": 0
+ },
+ {
+  "id": 68,
+  "name": "ASH",
+  "color": 6051926,
+  "flags": 3,
+  "pat": 11
+ },
+ {
+  "id": 69,
+  "name": "THORN",
+  "color": 2764318,
+  "flags": 7,
+  "pat": 20
+ },
+ {
+  "id": 70,
+  "name": "BLACK_WATER",
+  "color": 329224,
+  "flags": 162,
+  "pat": 0
+ },
+ {
+  "id": 71,
+  "name": "BURNT",
+  "color": 4866618,
+  "flags": 3,
+  "pat": 18
+ },
+ {
+  "id": 72,
+  "name": "RUST",
+  "color": 8011298,
+  "flags": 3,
+  "pat": 19
+ },
+ {
+  "id": 73,
+  "name": "SCRATCH",
+  "color": 9076600,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 74,
+  "name": "NPATH",
+  "color": 6182218,
+  "flags": 3,
+  "pat": 12
+ },
+ {
+  "id": 75,
+  "name": "NWALL",
+  "color": 3814706,
+  "flags": 3,
+  "pat": 3
+ },
+ {
+  "id": 76,
+  "name": "BLOOD_LIGHT",
+  "color": 11540496,
+  "flags": 19,
+  "pat": 0
+ },
+ {
+  "id": 77,
+  "name": "NCLIFF",
+  "color": 4868164,
+  "flags": 3,
+  "pat": 15
+ },
+ {
+  "id": 78,
+  "name": "GLYPH",
+  "color": 2761760,
+  "flags": 67,
+  "pat": 0
+ },
+ {
+  "id": 79,
+  "name": "NPLANK",
+  "color": 4864556,
+  "flags": 3,
+  "pat": 7
+ },
+ {
+  "id": 80,
+  "name": "NROOF",
+  "color": 3811876,
+  "flags": 3,
+  "pat": 9
+ },
+ {
+  "id": 81,
+  "name": "NFLOOR",
+  "color": 4075558,
+  "flags": 3,
+  "pat": 7
+ },
+ {
+  "id": 82,
+  "name": "NDOOR",
+  "color": 3023385,
+  "flags": 3,
+  "pat": 22
+ },
+ {
+  "id": 83,
+  "name": "GIRDER",
+  "color": 5911588,
+  "flags": 3,
+  "pat": 19
+ },
+ {
+  "id": 84,
+  "name": "BLOSSOM2",
+  "color": 15044530,
+  "flags": 7,
+  "pat": 6
+ },
+ {
+  "id": 85,
+  "name": "WILLOW",
+  "color": 8232006,
+  "flags": 7,
+  "pat": 16
+ },
+ {
+  "id": 86,
+  "name": "HOLLOW",
+  "color": 4863268,
+  "flags": 3,
+  "pat": 25
+ },
+ {
+  "id": 87,
+  "name": "TRUNKC",
+  "color": 0,
+  "flags": 1,
+  "pat": 0
+ },
+ {
+  "id": 88,
+  "name": "RAIL",
+  "color": 9276038,
+  "flags": 3,
+  "pat": 32
+ },
+ {
+  "id": 89,
+  "name": "PARQUET",
+  "color": 10120770,
+  "flags": 3,
+  "pat": 33
+ },
+ {
+  "id": 90,
+  "name": "PAINT_METAL",
+  "color": 5205862,
+  "flags": 3,
+  "pat": 31
+ },
+ {
+  "id": 91,
+  "name": "GLASS",
+  "color": 2898496,
+  "flags": 35,
+  "pat": 34
+ },
+ {
+  "id": 92,
+  "name": "TULLE",
+  "color": 15328988,
+  "flags": 6,
+  "pat": 35
+ },
+ {
+  "id": 93,
+  "name": "FRAME_V",
+  "color": 14868178,
+  "flags": 3,
+  "pat": 36
+ },
+ {
+  "id": 94,
+  "name": "FRAME_H",
+  "color": 14868178,
+  "flags": 3,
+  "pat": 37
+ },
+ {
+  "id": 95,
+  "name": "TRIM_LIME",
+  "color": 15131092,
+  "flags": 3,
+  "pat": 8
+ }
+]

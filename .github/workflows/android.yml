@@ -1,11 +1,17 @@
-# Builds the APK on every push to main and publishes it as release "app" (assets overwritten each time).
+# 1) builds libmezdu.so (arm64-v8a + x86_64) from crates/ and commits it to app/src/main/jniLibs on main,
+#    so Gradle builds without Rust (AI Studio syncs main and packs the current engine);
+# 2) builds the APK with Gradle and publishes it as release "app".
 name: android
 on:
   push:
     branches: [main]
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', 'app/**', 'gradle/**', '*.gradle.kts', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: android
+  cancel-in-progress: false
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -13,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: clippy (desktop + android)
@@ -21,27 +27,47 @@ jobs:
           sudo apt-get install -y -q libxkbcommon-dev >/dev/null
           cargo clippy --release -- -D warnings
           cargo clippy --release --target aarch64-linux-android -p mezdu-app -- -D warnings
-      - name: cargo-apk
-        run: cargo install cargo-apk --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: native libs
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 -o app/src/main/jniLibs build --release -p mezdu-app --lib
+          ls -la app/src/main/jniLibs/*
+      - name: commit native libs to main
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/jniLibs
+          if git diff --cached --quiet; then echo "libs unchanged"; exit 0; fi
+          git commit -m "build: libmezdu.so for ${GITHUB_SHA::7}"
+          for i in 1 2 3; do git pull --rebase -q origin main && git push origin HEAD:main && break; sleep 5; done
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: current
       - name: keystore
-        # one stable key keeps updates installable over the old APK; add secret ANDROID_KEYSTORE_B64 (base64 .jks, password "android")
+        # a stable key keeps updates installable over the previous APK: secret ANDROID_KEYSTORE_B64 = base64 of a .jks
+        # with alias androiddebugkey and password "android"
         env:
           KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
         run: |
-          if [ -n "$KS" ]; then echo "$KS" | base64 -d > release.keystore
+          if [ -n "$KS" ]; then echo "$KS" | base64 -d > debug.keystore
           else
-            echo "::warning::ANDROID_KEYSTORE_B64 is not set: a throwaway key is used, the APK will not install over a previous one"
-            keytool -genkeypair -keystore release.keystore -storepass android -keypass android -alias mezdu -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=mezdu"
+            echo "::warning::ANDROID_KEYSTORE_B64 is not set: throwaway key, the APK will not install over a previous one"
+            keytool -genkeypair -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
-      - name: build
-        env:
-          CARGO_APK_RELEASE_KEYSTORE: ${{ github.workspace }}/release.keystore
-          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
+      - name: gradle
         run: |
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME" ANDROID_SDK_ROOT="$ANDROID_HOME"
-          cargo apk build -p mezdu-app --release
-          mkdir -p out && cp target/release/apk/*.apk out/mezhdu.apk
+          gradle --no-daemon assembleRelease
+          mkdir -p out && cp app/build/outputs/apk/release/*.apk out/mezhdu.apk
           echo "${GITHUB_SHA::7} $(date -u +%FT%TZ)" > out/apk-version.txt
+          ls -la out
       - uses: actions/upload-artifact@v4
         with:
           name: mezhdu-apk
