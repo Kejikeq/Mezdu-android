@@ -14,6 +14,7 @@ use winit::window::{Window, WindowId};
 
 // Until there is text on screen, the clear colour reports the state: sky = Vulkan, amber = GL fallback,
 // dark red = some pack shader failed on this device.
+const FRAME: std::time::Duration = std::time::Duration::from_nanos(1_000_000_000 / 30);
 const SKY_VULKAN: [f64; 3] = [0.36, 0.47, 0.58];
 const SKY_GL: [f64; 3] = [0.62, 0.48, 0.22];
 const SKY_ERROR: [f64; 3] = [0.45, 0.06, 0.05];
@@ -31,6 +32,7 @@ pub struct App {
     keys: [bool; 6],
     last: Instant,
     start: Instant,
+    next_frame: Instant,
     /// MEZDU_TIME=<seconds> freezes the animation clock (comparable screenshots on the desktop)
     frozen: Option<f32>,
     sky: [f64; 3],
@@ -63,6 +65,7 @@ impl App {
             keys: [false; 6],
             last: Instant::now(),
             start: Instant::now(),
+            next_frame: Instant::now(),
             frozen: std::env::var("MEZDU_TIME").ok().and_then(|v| v.parse().ok()),
             sky: SKY_VULKAN,
             frames: 0, fps_t: Instant::now(), fps: 0.0 }
@@ -97,12 +100,17 @@ impl ApplicationHandler for App {
                     log::info!("shaders: {} compiled, {} failed", p.manifest.of_kind("shader").count() - bad.len(), bad.len());
                     if !bad.is_empty() {
                         self.sky = SKY_ERROR;
-                    } else if g.backend != mezdu_gfx::wgpu::Backend::Gl {
-                        match World::new(&g.device, &g.queue, g.config.format, p, 1) {
-                            Ok(w) => self.world = Some(w),
+                    } else {
+                        match g.try_world(p, 1) {
+                            Ok(w) => {
+                                log::info!("quality: {:?}", w.quality);
+                                self.world = Some(w);
+                            }
                             Err(e) => {
                                 log::error!("world: {e}");
-                                self.sky = SKY_ERROR;
+                                if g.backend != mezdu_gfx::wgpu::Backend::Gl {
+                                    self.sky = SKY_ERROR;
+                                }
                             }
                         }
                     }
@@ -113,6 +121,22 @@ impl ApplicationHandler for App {
         }
         log::info!("data dir {}", self.data_dir.display());
         window.request_redraw();
+    }
+
+    /// QUALITY.fps = 30: one frame every 33 ms, the event loop sleeps in between (battery); vsync alone would draw 60
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if self.gfx.is_none() {
+            el.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        let now = Instant::now();
+        if now >= self.next_frame {
+            self.next_frame = (self.next_frame + FRAME).max(now);
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+        el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 
     // Android destroys the native window in the background: drop the surface, stop rendering (battery)
@@ -177,9 +201,6 @@ impl ApplicationHandler for App {
                     if let Some(w) = &self.window {
                         w.set_title(&s);
                     }
-                }
-                if let Some(w) = &self.window {
-                    w.request_redraw();
                 }
             }
             _ => {}

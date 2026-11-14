@@ -17,6 +17,35 @@ const FAR_EXT: f32 = 40.0;
 const ENV_SIZE: u32 = 32;
 const ENV_MIPS: u32 = 5;
 
+/// The quality profile (QUALITY in src/main.js of the game): scene pixel ceiling in megapixels (the scene and the
+/// final pass run at that size, a last pass stretches it to the screen) and the screen-space effects.
+#[derive(Clone, Copy, Debug)]
+pub struct Quality {
+    pub px: f32,
+    pub ao: bool,
+    pub ssr: bool,
+    pub vol: bool,
+}
+
+impl Quality {
+    /// QUALITY of the game for the Redmi 10S: px 1.1, ao 6 / contact 6, ssr 8, vol 10
+    pub const VULKAN: Quality = Quality { px: 1.1, ao: true, ssr: true, vol: true };
+    /// the GLES fallback: fewer pixels, no screen-space passes (distance fog in the shaders instead of the volume)
+    pub const GL: Quality = Quality { px: 0.6, ao: false, ssr: false, vol: false };
+}
+
+/// stretches the finished image (at the quality size) to the screen
+const BLIT_WGSL: &str = r#"
+@group(0) @binding(0) var img: texture_2d<f32>;
+@group(0) @binding(1) var smp: sampler;
+struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> V {
+  let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  return V(vec4f(p * 2.0 - 1.0, 0.0, 1.0), vec2f(p.x, 1.0 - p.y));
+}
+@fragment fn fs(v: V) -> @location(0) vec4f { return textureSampleLevel(img, smp, v.uv, 0.0); }
+"#;
+
 struct Draw {
     cx: f32,
     cz: f32,
@@ -55,6 +84,9 @@ pub struct World {
     p_comp: wgpu::RenderPipeline,
     p_ao: wgpu::RenderPipeline,
     p_vol: wgpu::RenderPipeline,
+    p_blit: wgpu::RenderPipeline,
+    surface_format: wgpu::TextureFormat,
+    pub quality: Quality,
     /// the volume texture holds this size's fog (renderer.js volFresh)
     vol_fresh: bool,
     p_ssr: wgpu::RenderPipeline,
@@ -136,6 +168,9 @@ struct Targets {
     ao_bg: wgpu::BindGroup,
     vol: wgpu::TextureView,
     vol_bg: wgpu::BindGroup,
+    /// the finished image at the quality size, stretched to the screen by the blit pass
+    out: wgpu::TextureView,
+    blit_bg: wgpu::BindGroup,
     ssr_bg: wgpu::BindGroup,
 }
 
@@ -185,13 +220,13 @@ fn module(d: &wgpu::Device, pack: &Pack, name: &str) -> Result<wgpu::ShaderModul
 }
 
 impl World {
-    pub fn new(d: &wgpu::Device, q: &wgpu::Queue, surface_format: wgpu::TextureFormat, pack: &Pack, chapter: u32) -> Result<Self, String> {
+    pub fn new(d: &wgpu::Device, q: &wgpu::Queue, surface_format: wgpu::TextureFormat, pack: &Pack, chapter: u32, quality: Quality) -> Result<Self, String> {
         let m = &pack.manifest;
         let c = &m.constants;
         let pf = m.per_frame.ok_or("pack has no perFrame (old export)")?;
         let mut frame = f32s(&pack.read(&format!("frame/ch{chapter}.bin"))?);
         frame[134] = 0.75 / SHADOW_SIZE as f32; // grade.z: shadow texel
-        frame[142] = f32::from_bits(10); // counts.z (u32): volumetric fog steps (0 = plain distance fog in the shaders)
+        frame[142] = f32::from_bits(if quality.vol { 10 } else { 0 }); // counts.z (u32): volumetric fog steps (0 = plain distance fog in the shaders)
         frame[143] = f32::from_bits(1); // counts.w (u32): shadows on
         let tb = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let ra = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
@@ -440,6 +475,18 @@ impl World {
         // volumetric fog and light shafts at half resolution, every second frame (QUALITY vol 10, volHalf)
         let volm = module(d, pack, "vol")?;
         let p_vol = full("vol", &volm, "fsVol", None, &[Some(HDR.into())]);
+        let blitm = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("blit"), source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()) });
+        let p_blit = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blit"),
+            layout: None,
+            vertex: wgpu::VertexState { module: &blitm, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState { module: &blitm, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(surface_format.into())] }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let compm = module(d, pack, "comp")?;
         let p_comp = full("comp", &compm, "fsComp", None, &[Some(surface_format.into()), Some(HDR.into())]);
         // no depth of field yet
@@ -474,6 +521,9 @@ impl World {
             p_ao,
             p_ssr,
             p_vol,
+            p_blit,
+            surface_format,
+            quality,
             vol_fresh: false,
             ao_u,
             ssr_u,
@@ -519,6 +569,12 @@ impl World {
             ],
         });
         self.vol_fresh = false;
+        let out = tex(d, "out", ext(w, h, 1), wgpu::TextureDimension::D2, self.surface_format, 1, u).create_view(&Default::default());
+        let blit_bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg_blit"),
+            layout: &self.p_blit.get_bind_group_layout(0),
+            entries: &[be(0, tv(&out)), be(1, wgpu::BindingResource::Sampler(&self.comp_res.lin_smp))],
+        });
         let comp_bg = [1, 0].map(|read: usize| {
             d.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("bg_comp"),
@@ -547,7 +603,7 @@ impl World {
         });
         self.bg0 = self.res0.make(d, "bg_world", &self.frame_buf, &self.shadow[0], &self.shadow[1], &self.res0.bufs[3], &ao, &ssr);
         self.ss_valid = false;
-        self.targets = Some(Targets { w, h, hdr, gbuf, depth, hist, comp_bg, ao, ssr, ao_bg, ssr_bg, vol, vol_bg });
+        self.targets = Some(Targets { w, h, hdr, gbuf, depth, hist, comp_bg, ao, ssr, ao_bg, ssr_bg, vol, vol_bg, out, blit_bg });
     }
 
     /// renderer.js updateCascade: an orthographic box around `center`, snapped to a grid and to the texels;
@@ -582,7 +638,10 @@ impl World {
 
     /// Writes the frame uniforms and records shadow, main and final passes.
     #[allow(clippy::too_many_arguments)]
-    pub fn render(&mut self, d: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, w: u32, h: u32, cam: &Camera, time: f32) {
+    pub fn render(&mut self, d: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView, sw: u32, sh: u32, cam: &Camera, time: f32) {
+        // the scene and the final pass at no more than quality.px megapixels (QUALITY.px with outPx in the game)
+        let k = (self.quality.px * 1e6 / (sw.max(1) * sh.max(1)) as f32).sqrt().min(1.0);
+        let (w, h) = (((sw as f32 * k) as u32).max(1), ((sh as f32 * k) as u32).max(1));
         self.targets(d, w, h);
         let aspect = w as f32 / h.max(1) as f32;
         let proj = perspective(cam.fov_y, aspect, 0.08, 400.0);
@@ -633,8 +692,9 @@ impl World {
         f[124..127].copy_from_slice(&cam.pos.to_array()); // player: the camera stands in for the hero
         f[32..48].copy_from_slice(&self.casc[0].mat);
         f[376..392].copy_from_slice(&self.casc[1].mat);
-        f[392] = if self.ss_valid { 1.0 } else { 0.0 }; // fx.x: AO texture valid
-        f[396] = f[392]; // fx2.x: SSR texture valid
+        let ssv = |on: bool| if on && self.ss_valid { 1.0 } else { 0.0 };
+        f[392] = ssv(self.quality.ao); // fx.x: AO texture valid
+        f[396] = ssv(self.quality.ssr); // fx2.x: SSR texture valid
         f[394] = self.casc[0].bias;
         f[395] = self.casc[1].bias;
         q.write_buffer(&self.frame_buf, 0, bytes(f));
@@ -770,7 +830,7 @@ impl World {
         self.frame_no = self.frame_no.wrapping_add(1);
         q.write_buffer(&self.ao_u, 0, bytes(&[6.0, 6.0, tph, if self.frame[61] > 0.02 { 1.0 } else { 0.0 }]));
         q.write_buffer(&self.ssr_u, 0, bytes(&[8.0, tph, 1.36, 0.0]));
-        {
+        if self.quality.ao {
             let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ao"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &t.ao, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store } })],
@@ -780,14 +840,14 @@ impl World {
             p.set_bind_group(0, &t.ao_bg, &[]);
             p.draw(0..3, 0..1);
         }
-        {
+        if self.quality.ssr {
             let mut p = color_pass(enc, "ssr", &t.ssr);
             p.set_pipeline(&self.p_ssr);
             p.set_bind_group(0, &t.ssr_bg, &[]);
             p.draw(0..3, 0..1);
         }
         self.ss_valid = true;
-        if !self.vol_fresh || self.frame_no & 1 == 0 {
+        if self.quality.vol && (!self.vol_fresh || self.frame_no & 1 == 0) {
             let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("vol"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &t.vol, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }), store: wgpu::StoreOp::Store } })],
@@ -803,13 +863,18 @@ impl World {
         let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("comp"),
             color_attachments: &[
-                Some(wgpu::RenderPassColorAttachment { view: out, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } }),
+                Some(wgpu::RenderPassColorAttachment { view: &t.out, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } }),
                 Some(wgpu::RenderPassColorAttachment { view: &t.hist[hk], resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } }),
             ],
             ..Default::default()
         });
         p.set_pipeline(&self.p_comp);
         p.set_bind_group(0, &t.comp_bg[hk], &[]);
+        p.draw(0..3, 0..1);
+        drop(p);
+        let mut p = color_pass(enc, "blit", screen);
+        p.set_pipeline(&self.p_blit);
+        p.set_bind_group(0, &t.blit_bg, &[]);
         p.draw(0..3, 0..1);
     }
 }

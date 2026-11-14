@@ -60,11 +60,8 @@ impl Gfx {
             .map_err(|e| e.to_string())?;
         let info = adapter.get_info();
         // the world bind group has 7 storage buffers and 11 textures per stage (renderer.js L0): ask for what the GPU has
-        let limits = if info.backend == wgpu::Backend::Gl {
-            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
-        } else {
-            adapter.limits()
-        };
+        // (GLES included: whether its limits are enough is decided when the world is built, see World::try_new)
+        let limits = adapter.limits();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("mezdu"),
@@ -130,6 +127,22 @@ impl Gfx {
             }
             _ => None, // timeout / occluded: skip the frame
         }
+    }
+
+    /// Builds the world; on GL inside an error scope, because a GLES driver may lack storage buffers in the vertex
+    /// stage or enough bindings: then the world is not drawn and the status colour stays amber.
+    pub fn try_world(&self, pack: &mezdu_core::Pack, chapter: u32) -> Result<world::World, String> {
+        let gl = self.backend == wgpu::Backend::Gl;
+        let q = if gl { world::Quality::GL } else { world::Quality::VULKAN };
+        // shader translation failures are internal errors (e.g. textureLoad of a depth texture has no GLSL form)
+        let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let w = world::World::new(&self.device, &self.queue, self.config.format, pack, chapter, q);
+        let errs = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop())];
+        if let Some(e) = errs.into_iter().flatten().next() {
+            return Err(format!("{:?}: {e}", self.backend));
+        }
+        w
     }
 
     /// Scene frame: the world through the game's shaders, then present.
