@@ -328,6 +328,14 @@ fn slot_row(ui: &mut egui::Ui, label: &str, title: &str, meta: &str, enabled: bo
     enabled && resp.clicked()
 }
 
+/// A question over the menu or the pause: the update windows.
+struct Prompt {
+    title: &'static str,
+    text: String,
+    yes: (&'static str, Action),
+    no: (&'static str, Action),
+}
+
 /// what the slot screens and the menu show of the saves
 struct SlotsView<'a> {
     rows: &'a [Option<(String, String)>; 4],
@@ -368,6 +376,8 @@ enum Action {
     /// the restart window: start the app again on the new game library / not now
     Restart,
     Later,
+    /// «Нет» on the new-APK window
+    ApkLater,
     Resume,
     Settings,
     Back,
@@ -427,6 +437,8 @@ pub struct App {
     updates: SharedUpdates,
     /// «Позже» on the restart window: not asked again in this run
     update_later: bool,
+    /// «Нет» on the new-APK window: the menu still has its button
+    apk_later: bool,
     frames: u32,
     fps_t: Instant,
     pub fps: f32,
@@ -490,6 +502,7 @@ impl App {
             settings,
             updates,
             update_later: false,
+            apk_later: false,
             frames: 0,
             fps_t: Instant::now(),
             fps: 0.0,
@@ -605,6 +618,7 @@ impl App {
                 }
             }
             Action::Later => self.update_later = true,
+            Action::ApkLater => self.apk_later = true,
             Action::Restart => {
                 self.autosave();
                 #[cfg(target_os = "android")]
@@ -722,32 +736,26 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, st: &mut save::Settings, restart: Option<&str>, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
-        let big = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
-            let b = egui::Button::new(egui::RichText::new(text).size(19.0).strong()).min_size(egui::vec2(260.0, 50.0));
-            if ui.add_enabled(enabled, b).clicked() {
-                out.push(act);
-            }
-        };
+    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, st: &mut save::Settings, prompt: Option<&Prompt>, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let shade = |ctx: &egui::Context, a: u8| {
             ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_rgba_unmultiplied(0x0d, 0x0b, 0x10, a));
         };
-        if let Some(b) = restart {
+        if let Some(pr) = prompt {
             ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dim"))).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_black_alpha(0x90));
             egui::Area::new(egui::Id::unique("update")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).order(egui::Order::Tooltip).show(ctx, |ui| {
                 egui::Frame::window(ui.style()).inner_margin(20.0).corner_radius(18.0).show(ui, |ui| {
                     ui.set_width(340.0);
-                    ui.label(egui::RichText::new("Обновление готово").size(20.0).strong());
-                    ui.label(egui::RichText::new(format!("Сборка {b} скачана. Для применения обновления требуется перезапуск.")).size(14.0).color(INK.gamma_multiply(0.8)));
+                    ui.label(egui::RichText::new(pr.title).size(20.0).strong());
+                    ui.label(egui::RichText::new(&pr.text).size(14.0).color(INK.gamma_multiply(0.8)));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().button_padding = egui::vec2(14.0, 4.0);
-                        let go = egui::Button::new(egui::RichText::new("Перезапустить").size(15.0).color(ACCENT)).min_size(egui::vec2(170.0, 32.0));
+                        let go = egui::Button::new(egui::RichText::new(pr.yes.0).size(15.0).color(ACCENT)).min_size(egui::vec2(170.0, 32.0));
                         if ui.add(go).clicked() {
-                            out.push(Action::Restart);
+                            out.push(pr.yes.1);
                         }
-                        if ui.add(egui::Button::new(egui::RichText::new("Позже").size(15.0)).min_size(egui::vec2(110.0, 32.0))).clicked() {
-                            out.push(Action::Later);
+                        if ui.add(egui::Button::new(egui::RichText::new(pr.no.0).size(15.0)).min_size(egui::vec2(110.0, 32.0))).clicked() {
+                            out.push(pr.no.1);
                         }
                     });
                 });
@@ -826,10 +834,11 @@ impl App {
                     item(ui, "Настройки", true, Action::Settings, out);
                     #[cfg(not(target_os = "android"))]
                     item(ui, "Выход", true, Action::Quit, out);
-                    if let Some(c) = apk {
-                        ui.add_space(16.0);
-                        ui.label(egui::RichText::new(format!("Доступна новая версия приложения ({c})")).color(ACCENT));
-                        big(ui, "Скачать и установить", true, Action::UpdateApk, out);
+                    if apk.is_some() {
+                        let b = egui::Button::new(egui::RichText::new("Обновить приложение").size(15.0).color(ACCENT)).min_size(egui::vec2(220.0, 32.0));
+                        if ui.add(b).clicked() {
+                            out.push(Action::UpdateApk);
+                        }
                     }
                 });
                 egui::Area::new(egui::Id::unique("foot")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-20.0, -14.0)).order(egui::Order::Background).show(ctx, |ui| {
@@ -1138,7 +1147,23 @@ impl App {
         let info = self.sys_info();
         let (apk, code) = self.updates.lock().map(|u| (u.apk.clone(), u.code.clone())).unwrap_or_default();
         // the restart window: on the menu and the pause, until «Позже»
-        let restart = code.filter(|_| !self.update_later && matches!(self.screen, Screen::Menu | Screen::Paused));
+        // a window over the menu (and the pause): a newer APK first, then a downloaded build waiting for a restart
+        let calm = matches!(self.screen, Screen::Menu | Screen::Paused);
+        let prompt = if let Some(b) = apk.as_ref().filter(|_| calm && !self.apk_later) {
+            Some(Prompt {
+                title: "Скачайте новую версию",
+                text: format!("Вышла новая версия приложения ({b}). Скачайте и установите APK — игра и сохранения останутся."),
+                yes: ("Скачать", Action::UpdateApk),
+                no: ("Нет", Action::ApkLater),
+            })
+        } else {
+            code.filter(|_| calm && !self.update_later).map(|b| Prompt {
+                title: "Обновление готово",
+                text: format!("Сборка {b} скачана. Для применения обновления требуется перезапуск."),
+                yes: ("Перезапустить", Action::Restart),
+                no: ("Позже", Action::Later),
+            })
+        };
         let (screen, err) = (self.screen, self.load_error.clone());
         if self.toast.is_some_and(|(_, t)| t.elapsed().as_secs_f32() > 2.0) {
             self.toast = None;
@@ -1151,7 +1176,7 @@ impl App {
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &mut st, restart.as_deref(), &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &mut st, prompt.as_ref(), &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
         if st != self.settings {
             self.settings = st;
