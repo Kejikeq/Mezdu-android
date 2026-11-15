@@ -41,6 +41,11 @@ struct Hero {
     look: [f32; 2],
 }
 
+/// megabytes with one decimal, as the loading screen shows them ("9,8 МБ")
+fn mb(bytes: u64) -> String {
+    format!("{:.1} МБ", bytes as f64 / 1_048_576.0).replace('.', ",")
+}
+
 /// the loading stages shown on the loading screen
 const STAGES: [&str; 4] = ["Поиск обновлений", "Проверка целостности файлов", "Компиляция шейдеров под видеокарту", "Построение мира"];
 
@@ -75,9 +80,9 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
     set(0, 0.0);
     if fixed.is_none() {
         mezdu_updater::install_staged(&data_dir);
-        match mezdu_updater::update_now(&data_dir, &|d, t| {
-            set(0, d as f32 / t.max(1) as f32);
-            note(0, format!("скачивается: {d} из {t}"));
+        match mezdu_updater::update_now(&data_dir, &|done, total| {
+            set(0, done as f32 / total.max(1) as f32);
+            note(0, format!("скачивается: {} из {}", mb(done), mb(total)));
         }) {
             Ok(mezdu_updater::Outcome::Staged { commit, downloaded, dropped }) => note(0, format!("установлено обновление {}: скачано файлов {downloaded}, удалено {dropped}", &commit[..7.min(commit.len())])),
             Ok(mezdu_updater::Outcome::UpToDate) => note(0, "установлена последняя версия".into()),

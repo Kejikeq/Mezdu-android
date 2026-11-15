@@ -73,7 +73,8 @@ pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
 
 /// The loading screen's update stage: a newer pack is downloaded (`progress`: files done, files to fetch) and
 /// installed right away, before anything reads the pack.
-pub fn update_now(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<Outcome, String> {
+/// `progress` gets the bytes downloaded so far and the bytes to download in all (known before the first file).
+pub fn update_now(data_dir: &Path, progress: &dyn Fn(u64, u64)) -> Result<Outcome, String> {
     let r = check_pack_with(data_dir, progress)?;
     if matches!(r, Outcome::Staged { .. }) {
         install_staged(data_dir);
@@ -109,7 +110,7 @@ pub fn repair(data_dir: &Path, bad: &[String]) -> Result<usize, String> {
 /// File by file against the release: a file missing here or with another sha256 is downloaded, a file the release
 /// no longer has is dropped (except the kinds only this device has, `LOCAL_KINDS`), unchanged ones are linked from
 /// the installed pack. The result is staged in pack.next (complete or not at all).
-fn check_pack_with(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<Outcome, String> {
+fn check_pack_with(data_dir: &Path, progress: &dyn Fn(u64, u64)) -> Result<Outcome, String> {
     let cur = Pack::open(data_dir.join("pack")).ok();
     let remote_json = get(&format!("{PACK_URL}manifest.json"), 1 << 20)?;
     let mut remote = Manifest::parse(&remote_json)?;
@@ -146,6 +147,9 @@ fn check_pack_with(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<O
         Ok(p)
     };
     let mut downloaded = 0;
+    let total: u64 = fetch.iter().map(|f| f.size).sum();
+    let mut done: u64 = 0;
+    progress(0, total);
     for f in &target {
         let p = dest(&f.path)?;
         if same(local, f) {
@@ -162,7 +166,8 @@ fn check_pack_with(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<O
         }
         std::fs::write(&p, &d).map_err(|e| format!("{}: {e}", f.path))?;
         downloaded += 1;
-        progress(downloaded, fetch.len());
+        done += f.size;
+        progress(done, total);
     }
     remote.files.extend(kept);
     std::fs::write(dest("manifest.json")?, manifest_json(&remote_json, &remote)?).map_err(|e| e.to_string())?;
