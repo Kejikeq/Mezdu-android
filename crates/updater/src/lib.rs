@@ -67,6 +67,45 @@ pub fn install_staged(data_dir: &Path) {
 
 /// Compares the release with the installed pack and stages the new one when it is newer and complete.
 pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
+    check_pack_with(data_dir, &|_, _| {})
+}
+
+/// The loading screen's update stage: a newer pack is downloaded (`progress`: files done, files to fetch) and
+/// installed right away, before anything reads the pack.
+pub fn update_now(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<Outcome, String> {
+    let r = check_pack_with(data_dir, progress)?;
+    if matches!(r, Outcome::Staged { .. }) {
+        install_staged(data_dir);
+    }
+    Ok(r)
+}
+
+/// Downloads again the files of the installed pack that failed the integrity check, when the release still has
+/// the same commit; returns how many were repaired.
+pub fn repair(data_dir: &Path, bad: &[String]) -> Result<usize, String> {
+    let dir = data_dir.join("pack");
+    let cur = Pack::open(&dir)?;
+    let remote = Manifest::parse(&get(&format!("{PACK_URL}manifest.json"), 1 << 20)?)?;
+    let mut n = 0;
+    for b in bad {
+        let path = b.split(':').next().unwrap_or(b);
+        let Some(f) = cur.manifest.files.iter().find(|f| f.path == path) else { continue };
+        if !remote.files.iter().any(|r| r.path == f.path && r.sha256 == f.sha256) {
+            return Err(format!("{path}: нет в релизе"));
+        }
+        let d = get(&format!("{PACK_URL}{}", asset_name(&f.path)), f.size + 1)?;
+        if sha256_hex(&d) != f.sha256 {
+            return Err(format!("{path}: hash mismatch"));
+        }
+        let p = dir.join(&f.path);
+        std::fs::create_dir_all(p.parent().unwrap_or(&dir)).map_err(|e| e.to_string())?;
+        std::fs::write(&p, &d).map_err(|e| format!("{path}: {e}"))?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+fn check_pack_with(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<Outcome, String> {
     let cur = Pack::open(data_dir.join("pack"))?;
     let remote_json = get(&format!("{PACK_URL}manifest.json"), 1 << 20)?;
     let mut remote = Manifest::parse(&remote_json)?;
@@ -91,6 +130,7 @@ pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
         std::fs::write(&p, data).map_err(|e| format!("{rel}: {e}"))
     };
     let mut downloaded = 0;
+    let to_fetch = remote.files.iter().filter(|f| cur.manifest.files.iter().all(|c| c.path != f.path || c.sha256 != f.sha256)).count();
     for f in remote.files.iter().chain(kept.iter()) {
         let local = cur.read(&f.path).ok().filter(|d| d.len() as u64 == f.size && sha256_hex(d) == f.sha256);
         let data = match local {
@@ -101,6 +141,7 @@ pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
                     return Err(format!("{}: hash mismatch", f.path));
                 }
                 downloaded += 1;
+                progress(downloaded, to_fetch);
                 d
             }
         };
@@ -152,13 +193,14 @@ pub const PERIOD: std::time::Duration = std::time::Duration::from_secs(300);
 pub fn watch(data_dir: PathBuf, build: &'static str, on_apk: impl Fn(String)) {
     let mut told = false;
     loop {
+        // the loading screen does the first check itself (update_now); this one starts a period later
+        std::thread::sleep(PERIOD);
         if let Some(c) = run(data_dir.clone(), build) {
             if !told {
                 on_apk(c);
                 told = true;
             }
         }
-        std::thread::sleep(PERIOD);
     }
 }
 

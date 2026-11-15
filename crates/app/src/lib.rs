@@ -41,6 +41,94 @@ struct Hero {
     look: [f32; 2],
 }
 
+/// the loading stages shown on the loading screen
+const STAGES: [&str; 4] = ["Поиск обновлений", "Проверка целостности файлов", "Компиляция шейдеров под видеокарту", "Построение мира"];
+
+#[derive(Default)]
+struct LoadState {
+    stage: usize,
+    frac: f32,
+    /// what the last stage found (shown under its line)
+    notes: [String; 4],
+}
+
+struct Loaded {
+    pack: Pack,
+    vox: Option<Voxels>,
+    world: World,
+}
+
+/// The loader thread: updates, integrity, shaders, world. Nothing in it touches the window.
+fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st: Arc<Mutex<LoadState>>) -> Result<Loaded, String> {
+    let set = |stage: usize, frac: f32| {
+        if let Ok(mut s) = st.lock() {
+            s.stage = stage;
+            s.frac = frac;
+        }
+    };
+    let note = |stage: usize, t: String| {
+        if let Ok(mut s) = st.lock() {
+            s.notes[stage] = t;
+        }
+    };
+    // 1. updates: a newer pack of the release is downloaded and installed before anything reads it
+    set(0, 0.0);
+    if fixed.is_none() {
+        mezdu_updater::install_staged(&data_dir);
+        match mezdu_updater::update_now(&data_dir, &|d, t| {
+            set(0, d as f32 / t.max(1) as f32);
+            note(0, format!("скачивается: {d} из {t}"));
+        }) {
+            Ok(mezdu_updater::Outcome::Staged { commit, downloaded }) => note(0, format!("установлено обновление {} ({downloaded} файлов)", &commit[..7.min(commit.len())])),
+            Ok(mezdu_updater::Outcome::UpToDate) => note(0, "установлена последняя версия".into()),
+            Ok(mezdu_updater::Outcome::Skipped(_)) => note(0, "установлена последняя версия".into()),
+            Err(e) => {
+                log::warn!("updates: {e}");
+                note(0, "нет связи, проверка пропущена".into());
+            }
+        }
+    } else {
+        note(0, "пак задан вручную (MEZDU_PACK)".into());
+    }
+    // 2. integrity: every file against the manifest's sha256; broken ones are downloaded again
+    set(1, 0.0);
+    let dir = fixed.unwrap_or_else(|| data_dir.join("pack"));
+    let mut pack = Pack::open(&dir).map_err(|e| format!("Нет данных игры: {e}"))?;
+    let bad = pack.verify_with(&|f| set(1, f));
+    if bad.is_empty() {
+        note(1, format!("{} файлов в порядке", pack.manifest.files.len()));
+    } else {
+        log::warn!("integrity: {}", bad.join(", "));
+        note(1, format!("повреждено файлов: {}, восстанавливаю…", bad.len()));
+        let fixed = mezdu_updater::repair(&data_dir, &bad);
+        pack = Pack::open(&dir).map_err(|e| e.to_string())?;
+        let still = pack.verify();
+        if !still.is_empty() {
+            // the next start copies the pack bundled in the APK again
+            let _ = std::fs::remove_file(data_dir.join("bundled.txt"));
+            return Err(format!("Файлы игры повреждены ({}). Подключитесь к интернету или перезапустите приложение. {}", still.len(), fixed.err().unwrap_or_default()));
+        }
+        note(1, format!("восстановлено файлов: {}", bad.len()));
+    }
+    // 3-4. shaders for this GPU, then the world (pipelines through the on-disk cache)
+    let world = mezdu_gfx::build_world(&ctx, &pack, 1, &data_dir.join("pipeline-cache"), &|stage, f| set(2 + stage as usize, f)).map_err(|e| {
+        if ctx.backend == mezdu_gfx::wgpu::Backend::Gl {
+            "Видеокарта без Vulkan: мир на запасном OpenGL ES пока не рисуется.".to_string()
+        } else {
+            format!("Мир не построился: {e}")
+        }
+    })?;
+    note(2, format!("{} шейдеров", pack.manifest.of_kind("shader").count()));
+    note(3, format!("{} участков, {} квадов", world.chunks(), world.quads));
+    set(4, 1.0);
+    let vox = Voxels::load(&pack).ok();
+    Ok(Loaded { pack, vox, world })
+}
+
+type LoadResult = std::sync::mpsc::Receiver<Result<Loaded, String>>;
+/// stage, share done, notes: what the loading screen shows
+type LoadView = (usize, f32, [String; 4]);
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
     Loading,
@@ -59,6 +147,8 @@ enum Action {
     ToMenu,
     Pause,
     UpdateApk,
+    /// desktop only: Android apps are closed by the system
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     Quit,
 }
 
@@ -69,8 +159,8 @@ pub struct App {
     gfx: Option<Gfx>,
     ui: Option<Ui>,
     world: Option<World>,
-    /// the world is built on the frame after the loading screen has been shown
-    world_pending: bool,
+    /// the loader thread's progress and result
+    loading: Option<(Arc<Mutex<LoadState>>, LoadResult)>,
     loading_frames: u32,
     load_error: Option<String>,
     screen: Screen,
@@ -125,7 +215,7 @@ impl App {
             gfx: None,
             ui: None,
             world: None,
-            world_pending: false,
+            loading: None,
             loading_frames: 0,
             load_error: None,
             screen: Screen::Loading,
@@ -154,48 +244,48 @@ impl App {
         format!("{g} · {:.0} FPS · {p}", self.fps)
     }
 
-    /// re-opens the pack after an update; the hero keeps where it stands
-    fn reload_pack(&mut self) {
-        let Ok(p) = Pack::open(self.data_dir.join("pack")) else { return };
-        log::info!("pack {} ({}) loaded", p.manifest.version, &p.manifest.commit[..7.min(p.manifest.commit.len())]);
-        if let (Some(h), Ok(vox)) = (&mut self.hero, Voxels::load(&p)) {
-            h.vox = vox;
-        }
-        self.pack = Some(p);
+    fn start_loading(&mut self) {
+        let Some(g) = &self.gfx else { return };
+        let st = Arc::new(Mutex::new(LoadState::default()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (ctx, dir, fixed, st2) = (g.ctx(), self.data_dir.clone(), std::env::var_os("MEZDU_PACK").map(PathBuf::from), st.clone());
+        let _ = std::thread::Builder::new().name("loader".into()).spawn(move || {
+            let _ = tx.send(load(ctx, dir, fixed, st2));
+        });
+        self.loading = Some((st, rx));
+        self.loading_frames = 0;
+        self.load_error = None;
     }
 
-    fn build_world(&mut self) {
-        self.world_pending = false;
-        let (Some(g), Some(p)) = (&self.gfx, &self.pack) else {
-            self.load_error = Some("Нет данных игры (пака). Переустановите приложение.".into());
-            return;
-        };
-        let bad = g.compile_shaders(&p.shaders());
-        for (n, e) in &bad {
-            log::error!("shader {n}: {e}");
-        }
-        if !bad.is_empty() {
-            self.load_error = Some(format!("Шейдеры игры не компилируются на этом устройстве: {}", bad.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join(", ")));
-            return;
-        }
-        match g.try_world(p, 1) {
-            Ok(w) => {
-                log::info!("quality: {:?}", w.quality);
-                if let Some(h) = &mut self.hero {
-                    h.rig = RigModels::find("hero", &w.model_names());
+    /// takes the loader's result when it is ready
+    fn poll_loading(&mut self) {
+        let Some((_, rx)) = &self.loading else { return };
+        let Ok(r) = rx.try_recv() else { return };
+        self.loading = None;
+        match r {
+            Ok(l) => {
+                log::info!("loaded: pack {} · quality {:?}", &l.pack.manifest.commit[..7.min(l.pack.manifest.commit.len())], l.world.quality);
+                match (&mut self.hero, l.vox) {
+                    (Some(h), Some(v)) => h.vox = v,
+                    (None, Some(vox)) => {
+                        let player = Player::new(&vox);
+                        self.hero = Some(Hero { vox, player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] });
+                    }
+                    _ => {}
                 }
-                self.world = Some(w);
+                if let Some(h) = &mut self.hero {
+                    h.rig = RigModels::find("hero", &l.world.model_names());
+                }
+                self.pack = Some(l.pack);
+                self.world = Some(l.world);
                 if self.screen == Screen::Loading {
                     self.screen = Screen::Menu;
                 }
             }
             Err(e) => {
-                log::error!("world: {e}");
-                self.load_error = Some(if g.backend == mezdu_gfx::wgpu::Backend::Gl {
-                    "Видеокарта без Vulkan: мир на запасном OpenGL ES пока не рисуется.".into()
-                } else {
-                    format!("Мир не построился: {e}")
-                });
+                log::error!("loading: {e}");
+                self.load_error = Some(e);
+                self.screen = Screen::Loading;
             }
         }
     }
@@ -243,7 +333,7 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, loading_t: f32, out: &mut Vec<Action>) {
+    fn layout(ctx: &egui::Context, screen: Screen, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let big = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
             let b = egui::Button::new(egui::RichText::new(text).size(19.0).strong()).min_size(egui::vec2(260.0, 50.0));
             if ui.add_enabled(enabled, b).clicked() {
@@ -257,23 +347,39 @@ impl App {
             Screen::Loading => {
                 shade(ctx, 255);
                 egui::Area::new(egui::Id::unique("loading")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).order(egui::Order::Background).show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
+                    ui.set_width(340.0);
+                    ui.vertical(|ui| {
                         ui.label(egui::RichText::new("МЕЖДУ").size(54.0).color(INK).strong());
                         ui.add_space(14.0);
-                        match err {
-                            Some(e) => {
-                                ui.label(egui::RichText::new(e).color(egui::Color32::from_rgb(0xe0, 0x50, 0x3f)));
-                            }
-                            None => {
-                                let (r, p) = ui.allocate_painter(egui::vec2(260.0, 4.0), egui::Sense::hover());
+                        let (stage, frac, notes) = load.1.map_or((STAGES.len(), 1.0, Default::default()), |(a, b, c)| (*a, *b, c.clone()));
+                        for (i, name) in STAGES.iter().enumerate() {
+                            let (col, mark) = if i < stage { (INK.gamma_multiply(0.75), "готово") } else if i == stage { (ACCENT, "") } else { (INK.gamma_multiply(0.35), "") };
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(*name).size(16.0).color(col));
+                                if !mark.is_empty() {
+                                    ui.label(egui::RichText::new(mark).size(13.0).color(INK.gamma_multiply(0.45)));
+                                }
+                            });
+                            if i == stage && err.is_none() {
+                                let (r, p) = ui.allocate_painter(egui::vec2(300.0, 4.0), egui::Sense::hover());
                                 p.rect_filled(r.rect, 2.0, egui::Color32::from_rgba_unmultiplied(255, 245, 230, 0x18));
-                                let x = (loading_t * 0.8).fract();
-                                let a = r.rect.left() + r.rect.width() * (x - 0.25).max(0.0);
-                                let b = r.rect.left() + r.rect.width() * (x + 0.1).min(1.0);
-                                p.rect_filled(egui::Rect::from_x_y_ranges(a..=b, r.rect.y_range()), 2.0, ACCENT);
-                                ui.add_space(10.0);
-                                ui.label(egui::RichText::new("Подготовка мира…").color(INK.gamma_multiply(0.7)));
+                                if frac > 0.001 {
+                                    p.rect_filled(egui::Rect::from_min_size(r.rect.min, egui::vec2(r.rect.width() * frac.clamp(0.0, 1.0), 4.0)), 2.0, ACCENT);
+                                } else {
+                                    let x = (load.0 * 0.8).fract();
+                                    let a = r.rect.left() + r.rect.width() * (x - 0.25).max(0.0);
+                                    let b = r.rect.left() + r.rect.width() * (x + 0.1).min(1.0);
+                                    p.rect_filled(egui::Rect::from_x_y_ranges(a..=b, r.rect.y_range()), 2.0, ACCENT);
+                                }
                             }
+                            if !notes[i].is_empty() {
+                                ui.label(egui::RichText::new(&notes[i]).size(12.0).color(INK.gamma_multiply(0.5)));
+                            }
+                            ui.add_space(4.0);
+                        }
+                        if let Some(e) = err {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(e).color(egui::Color32::from_rgb(0xe0, 0x50, 0x3f)));
                         }
                     });
                 });
@@ -369,11 +475,6 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
-        // a pack the updater staged while the game ran: installed now, before the world is built again
-        if self.world.is_none() && std::env::var_os("MEZDU_PACK").is_none() && self.data_dir.join("pack.next/manifest.json").exists() {
-            mezdu_updater::install_staged(&self.data_dir);
-            self.reload_pack();
-        }
         let window = match &self.window {
             Some(w) => w.clone(),
             None => {
@@ -387,13 +488,11 @@ impl ApplicationHandler for App {
             Ok(g) => {
                 self.ui = Some(Ui::new(&g.device, g.config.format, window.scale_factor() as f32));
                 self.gfx = Some(g);
-                self.world_pending = true;
-                self.loading_frames = 0;
-                self.load_error = None;
+                self.start_loading();
                 if self.screen == Screen::Playing {
                     self.screen = Screen::Paused; // back from the background: the game waits
                 }
-                if self.world.is_none() && self.screen != Screen::Paused {
+                if self.screen != Screen::Paused {
                     self.screen = Screen::Loading;
                 }
             }
@@ -493,13 +592,8 @@ impl App {
     fn redraw(&mut self, el: &ActiveEventLoop) {
         let dt = self.last.elapsed().as_secs_f32().min(0.1);
         self.last = Instant::now();
-        if self.world_pending {
-            // the loading screen has been on screen for a frame: now the slow part
-            if self.loading_frames >= 2 {
-                self.build_world();
-            }
-            self.loading_frames += 1;
-        }
+        self.poll_loading();
+        self.loading_frames += 1;
         let time = self.frozen.unwrap_or_else(|| self.start.elapsed().as_secs_f32());
         let size = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
         let mut focus = self.cam.pos;
@@ -547,11 +641,12 @@ impl App {
         let apk = self.apk.lock().ok().and_then(|a| a.clone());
         let (screen, err) = (self.screen, self.load_error.clone());
         let lt = self.loading_frames as f32 / 30.0;
+        let ls = self.loading.as_ref().and_then(|(s, _)| s.lock().ok().map(|s| (s.stage, s.frac, s.notes.clone())));
         let mut actions = Vec::new();
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &info, err.as_deref(), apk.as_deref(), joy_vis, lt, &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
         for a in actions {
             self.act(a, el);

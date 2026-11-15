@@ -101,8 +101,17 @@ impl Pack {
     }
     /// Files whose size or sha256 differ from the manifest.
     pub fn verify(&self) -> Vec<String> {
+        self.verify_with(&|_| {})
+    }
+
+    /// `verify` reporting the share of bytes checked (0..1); the bad entries are the paths, then ": why".
+    pub fn verify_with(&self, progress: &dyn Fn(f32)) -> Vec<String> {
+        let total: u64 = self.manifest.files.iter().map(|f| f.size).sum::<u64>().max(1);
+        let mut done = 0u64;
         let mut bad = Vec::new();
         for f in &self.manifest.files {
+            progress(done as f32 / total as f32);
+            done += f.size;
             match self.read(&f.path) {
                 Ok(d) if d.len() as u64 == f.size && sha256_hex(&d) == f.sha256 => {}
                 Ok(_) => bad.push(format!("{}: hash mismatch", f.path)),

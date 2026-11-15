@@ -222,7 +222,8 @@ fn module(d: &wgpu::Device, pack: &Pack, name: &str) -> Result<wgpu::ShaderModul
 }
 
 impl World {
-    pub fn new(d: &wgpu::Device, q: &wgpu::Queue, surface_format: wgpu::TextureFormat, pack: &Pack, chapter: u32, quality: Quality) -> Result<Self, String> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(d: &wgpu::Device, q: &wgpu::Queue, surface_format: wgpu::TextureFormat, pack: &Pack, chapter: u32, quality: Quality, cache: Option<&wgpu::PipelineCache>) -> Result<Self, String> {
         let m = &pack.manifest;
         let c = &m.constants;
         let pf = m.per_frame.ok_or("pack has no perFrame (old export)")?;
@@ -283,7 +284,7 @@ impl World {
                 depth_stencil: None,
                 multisample: Default::default(),
                 multiview_mask: None,
-                cache: None,
+                cache,
             })
         };
         let lenv_pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&lenv)], immediate_size: 0 });
@@ -453,7 +454,7 @@ impl World {
                 }),
                 multisample: Default::default(),
                 multiview_mask: None,
-                cache: None,
+                cache,
             })
         };
         let pipe = |label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| pipe_l(&layout, label, vs, fs, cull, shadow);
@@ -487,7 +488,7 @@ impl World {
             depth_stencil: None,
             multisample: Default::default(),
             multiview_mask: None,
-            cache: None,
+            cache,
         });
         let compm = module(d, pack, "comp")?;
         let p_comp = full("comp", &compm, "fsComp", None, &[Some(surface_format.into()), Some(HDR.into())]);
@@ -640,6 +641,11 @@ impl World {
     }
 
     /// Writes the frame uniforms and records shadow, main and final passes.
+    /// macro chunks with geometry
+    pub fn chunks(&self) -> usize {
+        self.draws.len()
+    }
+
     /// names of the pack's models (index = model index of an instance)
     pub fn model_names(&self) -> Vec<&str> {
         self.props.as_ref().map_or_else(Vec::new, |p| p.meta.iter().map(|m| m.name.as_str()).collect())

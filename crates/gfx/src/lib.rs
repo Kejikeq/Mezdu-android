@@ -11,6 +11,7 @@ pub struct Gfx {
     pub config: wgpu::SurfaceConfiguration,
     pub backend: wgpu::Backend,
     pub adapter_name: String,
+    pub adapter_info: wgpu::AdapterInfo,
 }
 
 fn backends_in_order() -> Vec<wgpu::Backends> {
@@ -62,10 +63,13 @@ impl Gfx {
         // the world bind group has 7 storage buffers and 11 textures per stage (renderer.js L0): ask for what the GPU has
         // (GLES included: whether its limits are enough is decided when the world is built, see World::try_new)
         let limits = adapter.limits();
+        // compiled pipelines kept on disk between starts (Vulkan): the second start skips the driver's compile
+        let required_features = adapter.features() & wgpu::Features::PIPELINE_CACHE;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("mezdu"),
                 required_limits: limits,
+                required_features,
                 ..Default::default()
             })
             .await
@@ -86,7 +90,7 @@ impl Gfx {
         };
         surface.configure(&device, &config);
         log::info!("gfx: {:?} · {} · {:?}", info.backend, info.name, format);
-        Ok(Gfx { surface, device, queue, config, backend: info.backend, adapter_name: info.name })
+        Ok(Gfx { surface, device, queue, config, backend: info.backend, adapter_name: info.name.clone(), adapter_info: info })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -129,22 +133,6 @@ impl Gfx {
         }
     }
 
-    /// Builds the world; on GL inside an error scope, because a GLES driver may lack storage buffers in the vertex
-    /// stage or enough bindings: then the world is not drawn and the status colour stays amber.
-    pub fn try_world(&self, pack: &mezdu_core::Pack, chapter: u32) -> Result<world::World, String> {
-        let gl = self.backend == wgpu::Backend::Gl;
-        let q = if gl { world::Quality::GL } else { world::Quality::VULKAN };
-        // shader translation failures are internal errors (e.g. textureLoad of a depth texture has no GLSL form)
-        let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let w = world::World::new(&self.device, &self.queue, self.config.format, pack, chapter, q);
-        let errs = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop())];
-        if let Some(e) = errs.into_iter().flatten().next() {
-            return Err(format!("{:?}: {e}", self.backend));
-        }
-        w
-    }
-
     /// One frame: the world through the game's shaders (or a plain colour without one), then `overlay` draws on top
     /// (the interface), then present.
     #[allow(clippy::too_many_arguments)]
@@ -180,4 +168,61 @@ impl Gfx {
         self.queue.submit([enc.finish()]);
         self.queue.present(tex);
     }
+}
+
+/// What the loader thread needs of the device: everything is cloneable and Send.
+#[derive(Clone)]
+pub struct DeviceCtx {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub format: wgpu::TextureFormat,
+    pub backend: wgpu::Backend,
+    pub info: wgpu::AdapterInfo,
+}
+
+impl Gfx {
+    pub fn ctx(&self) -> DeviceCtx {
+        DeviceCtx { device: self.device.clone(), queue: self.queue.clone(), format: self.config.format, backend: self.backend, info: self.adapter_info.clone() }
+    }
+}
+
+/// The loading stages that need the GPU: compiles every shader of the pack for this device (`progress` gets the
+/// share done), then builds the world with its pipelines through the on-disk pipeline cache in `cache_dir`.
+/// On GL inside error scopes: a GLES driver may lack what the world needs, then Err and the status stays amber.
+pub fn build_world(ctx: &DeviceCtx, pack: &mezdu_core::Pack, chapter: u32, cache_dir: &std::path::Path, progress: &dyn Fn(u32, f32)) -> Result<world::World, String> {
+    let d = &ctx.device;
+    let shaders = pack.shaders();
+    for (i, (name, src)) in shaders.iter().enumerate() {
+        progress(0, i as f32 / shaders.len().max(1) as f32);
+        let scope = d.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _m = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(name), source: wgpu::ShaderSource::Wgsl(src.as_str().into()) });
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            return Err(format!("шейдер {name}: {e}"));
+        }
+    }
+    progress(1, 0.0);
+    let key = wgpu::util::pipeline_cache_key(&ctx.info).filter(|_| d.features().contains(wgpu::Features::PIPELINE_CACHE));
+    let file = key.map(|k| cache_dir.join(k));
+    let data = file.as_ref().and_then(|f| std::fs::read(f).ok());
+    // SAFETY: the data was written by get_data of this app for this adapter (the key holds vendor, device, driver)
+    let cache = file.as_ref().map(|_| unsafe { d.create_pipeline_cache(&wgpu::PipelineCacheDescriptor { label: Some("mezdu"), data: data.as_deref(), fallback: true }) });
+    log::info!("pipeline cache: {}", match (&cache, &data) { (Some(_), Some(b)) => format!("{} KB from disk", b.len() / 1024), (Some(_), None) => "new".into(), _ => "not supported".into() });
+    let gl = ctx.backend == wgpu::Backend::Gl;
+    let q = if gl { world::Quality::GL } else { world::Quality::VULKAN };
+    // shader translation failures are internal errors (e.g. textureLoad of a depth texture has no GLSL form)
+    let internal = d.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = d.push_error_scope(wgpu::ErrorFilter::Validation);
+    let w = world::World::new(d, &ctx.queue, ctx.format, pack, chapter, q, cache.as_ref());
+    let errs = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop())];
+    if let Some(e) = errs.into_iter().flatten().next() {
+        return Err(format!("{:?}: {e}", ctx.backend));
+    }
+    if let (Some(c), Some(f)) = (&cache, &file) {
+        if let Some(bytes) = c.get_data() {
+            let _ = std::fs::create_dir_all(cache_dir);
+            let _ = std::fs::write(f, bytes);
+        }
+    }
+    progress(1, 1.0);
+    w
 }
