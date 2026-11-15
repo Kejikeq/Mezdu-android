@@ -7,7 +7,11 @@ fn main() {
     println!("update: {r:?}");
     match mezdu_core::Pack::open(dir.join("pack")) {
         Ok(p) => {
-            let bad = p.verify();
+            let mut bad = p.verify();
+            if !bad.is_empty() {
+                println!("integrity: {} broken, repair: {:?}", bad.len(), mezdu_updater::repair(&dir, &bad));
+                bad = p.verify();
+            }
             println!("pack {} · {} files · integrity: {}", &p.manifest.commit[..7], p.manifest.files.len(), if bad.is_empty() { "OK".into() } else { bad.join(", ") });
         }
         Err(e) => println!("pack: {e}"),
