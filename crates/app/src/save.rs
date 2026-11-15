@@ -115,3 +115,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+/// The player's settings (a part of DEFAULT_SETTINGS of save.js): look sensitivity, inverted vertical look, the
+/// frame counter on screen. Kept in settings.txt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Settings {
+    pub sens: f32,
+    pub invert_y: bool,
+    pub show_fps: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { sens: 1.0, invert_y: false, show_fps: false }
+    }
+}
+
+pub fn read_settings(data: &Path) -> Settings {
+    let t = std::fs::read_to_string(data.join("settings.txt")).unwrap_or_default();
+    let v: Vec<f32> = t.split_whitespace().filter_map(|w| w.parse().ok()).collect();
+    if v.len() < 3 || v.iter().any(|x| !x.is_finite()) {
+        return Settings::default();
+    }
+    Settings { sens: v[0].clamp(0.3, 2.5), invert_y: v[1] > 0.5, show_fps: v[2] > 0.5 }
+}
+
+pub fn write_settings(data: &Path, s: &Settings) {
+    let _ = std::fs::write(data.join("settings.txt"), format!("{} {} {}\n", s.sens, s.invert_y as u8, s.show_fps as u8));
+}

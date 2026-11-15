@@ -298,6 +298,7 @@ struct SlotsView<'a> {
     rows: &'a [Option<(String, String)>; 4],
     confirm: Option<usize>,
     toast: Option<&'static str>,
+    fps: f32,
 }
 
 type LoadResult = std::sync::mpsc::Receiver<Result<Loaded, String>>;
@@ -380,6 +381,7 @@ pub struct App {
     back_to: Screen,
     /// seconds of play in this game
     playtime: f64,
+    settings: save::Settings,
     /// a short message at the top («Сохранено») and when it was shown
     toast: Option<(&'static str, Instant)>,
     /// commit of a newer APK in the release, set by the updater thread
@@ -412,6 +414,7 @@ impl App {
                 None
             }
         });
+        let settings = save::read_settings(&data_dir);
         App {
             data_dir,
             pack,
@@ -443,6 +446,7 @@ impl App {
             back_to: Screen::Menu,
             playtime: 0.0,
             toast: None,
+            settings,
             apk,
             frames: 0,
             fps_t: Instant::now(),
@@ -539,7 +543,7 @@ impl App {
             }
             Action::OpenLoad | Action::OpenSave => {
                 self.refresh_slots();
-                self.back_to = self.screen;
+                self.remember_back();
                 self.confirm = None;
                 self.screen = if a == Action::OpenLoad { Screen::Load } else { Screen::Save };
             }
@@ -575,7 +579,7 @@ impl App {
                 self.autosave();
             }
             Action::Settings => {
-                self.back_to = self.screen;
+                self.remember_back();
                 self.screen = Screen::Settings;
             }
             // from the settings or the slots: where they were opened
@@ -601,6 +605,14 @@ impl App {
             Action::Quit => el.exit(),
         }
         self.joystick_reset();
+    }
+
+    /// where Back returns from the settings or the slots: only the menu or the pause count (a tap that arrives
+    /// twice must not make the settings their own way back)
+    fn remember_back(&mut self) {
+        if matches!(self.screen, Screen::Menu | Screen::Paused) {
+            self.back_to = self.screen;
+        }
     }
 
     /// the game where a save left it
@@ -658,7 +670,7 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
+    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, st: &mut save::Settings, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let big = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
             let b = egui::Button::new(egui::RichText::new(text).size(19.0).strong()).min_size(egui::vec2(260.0, 50.0));
             if ui.add_enabled(enabled, b).clicked() {
@@ -747,18 +759,26 @@ impl App {
                 shade(ctx, 0xb0);
                 egui::Area::new(egui::Id::unique("settings")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
                     egui::Frame::window(ui.style()).inner_margin(28.0).corner_radius(18.0).show(ui, |ui| {
-                        ui.label(egui::RichText::new("Настройки").size(28.0).strong());
-                        ui.add_space(8.0);
-                        ui.label("Качество подобрано под Redmi 10S: 30 кадров в секунду, тени, туман, отражения и сглаживание как в веб-версии.");
-                        ui.label("Обновления игры скачиваются сами, пока есть интернет, и ставятся при следующем входе в игру.");
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new(info).size(12.0).color(INK.gamma_multiply(0.6)));
+                        ui.set_width(380.0);
+                        ui.label(egui::RichText::new("Настройки").size(26.0).strong());
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new("Чувствительность обзора").size(15.0));
+                        ui.spacing_mut().slider_width = 300.0;
+                        ui.add(egui::Slider::new(&mut st.sens, 0.3..=2.5).show_value(false));
+                        ui.add_space(6.0);
+                        ui.checkbox(&mut st.invert_y, egui::RichText::new("Инвертировать обзор по вертикали").size(15.0));
+                        ui.checkbox(&mut st.show_fps, egui::RichText::new("Показывать FPS").size(15.0));
                         ui.add_space(14.0);
                         big(ui, "Назад", true, Action::Back, out);
                     });
                 });
             }
             Screen::Playing => {
+                if st.show_fps {
+                    egui::Area::new(egui::Id::unique("fps")).anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 12.0)).order(egui::Order::Background).show(ctx, |ui| {
+                        ui.label(egui::RichText::new(format!("{:.0} FPS", sv.fps)).size(13.0).color(INK.gamma_multiply(0.7)));
+                    });
+                }
                 egui::Area::new(egui::Id::unique("pause")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 18.0)).show(ctx, |ui| {
                     let b = egui::Button::new("").min_size(egui::vec2(52.0, 52.0)).corner_radius(26.0);
                     let r = ui.add(b);
@@ -784,13 +804,16 @@ impl App {
                 shade(ctx, 0xa0);
                 egui::Area::new(egui::Id::unique("paused")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new("Пауза").size(36.0).strong());
-                        ui.add_space(16.0);
-                        big(ui, "Продолжить", true, Action::Resume, out);
-                        big(ui, "Сохранить", true, Action::OpenSave, out);
-                        big(ui, "Загрузить", true, Action::OpenLoad, out);
-                        big(ui, "Настройки", true, Action::Settings, out);
-                        big(ui, "В главное меню", true, Action::ToMenu, out);
+                        ui.label(egui::RichText::new("Пауза").size(22.0).strong());
+                        ui.add_space(6.0);
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.spacing_mut().button_padding = egui::vec2(16.0, 4.0);
+                        for (t, act) in [("Продолжить", Action::Resume), ("Сохранить", Action::OpenSave), ("Загрузить", Action::OpenLoad), ("Настройки", Action::Settings), ("В главное меню", Action::ToMenu)] {
+                            let b = egui::Button::new(egui::RichText::new(t).size(14.0)).min_size(egui::vec2(190.0, 30.0));
+                            if ui.add(b).clicked() {
+                                out.push(act);
+                            }
+                        }
                     });
                 });
             }
@@ -1023,7 +1046,8 @@ impl App {
         if playing && self.save_t >= save::AUTOSAVE {
             self.autosave();
         }
-        if matches!(self.screen, Screen::Menu | Screen::Settings) {
+        // the settings opened from the pause keep the game behind them
+        if self.screen == Screen::Menu || (self.screen == Screen::Settings && self.back_to == Screen::Menu) {
             // the menu's view drifts a little, as a camera on a tripod in the wind
             self.cam.yaw = MENU_CAM[3] + (time * 0.07).sin() * 0.06;
         }
@@ -1033,15 +1057,20 @@ impl App {
         if self.toast.is_some_and(|(_, t)| t.elapsed().as_secs_f32() > 2.0) {
             self.toast = None;
         }
-        let sv = SlotsView { rows: &self.slot_rows, confirm: self.confirm, toast: self.toast.map(|t| t.0) };
+        let sv = SlotsView { rows: &self.slot_rows, confirm: self.confirm, toast: self.toast.map(|t| t.0), fps: self.fps };
+        let mut st = self.settings;
         let lt = self.loading_frames as f32 / 30.0;
         let ls = self.loading.as_ref().and_then(|(s, _)| s.lock().ok().map(|s| (s.stage, s.frac, s.notes.clone())));
         let mut actions = Vec::new();
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &mut st, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
+        if st != self.settings {
+            self.settings = st;
+            save::write_settings(&self.data_dir, &st);
+        }
         for a in actions {
             self.act(a, el);
         }
@@ -1063,8 +1092,9 @@ impl App {
             return;
         }
         if let Some(h) = &mut self.hero {
-            h.look[0] += dx as f32;
-            h.look[1] += dy as f32;
+            let k = self.settings.sens;
+            h.look[0] += dx as f32 * k;
+            h.look[1] += dy as f32 * k * if self.settings.invert_y { -1.0 } else { 1.0 };
         }
     }
 
