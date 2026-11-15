@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "8c9dc6ade319691c9a10c55aaf4164ee68cc8ac9",
- "created": "2026-11-15T20:54:53.042Z",
+ "commit": "16a3b52e1bea2ea536ead1ca208d174a81492abf",
+ "created": "2026-11-15T21:17:35.938Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -741,8 +741,8 @@
   },
   {
    "path": "script/game/story/dialogue.js",
-   "sha256": "9eefc2a820ba3321aaa64f4e51ade875aa69e700e0d578b207e4c10fef34a278",
-   "size": 8655,
+   "sha256": "f8c0d8ad4e088807edc26bf44b1948fd8f268e2349f4fa1f334a0e001b090aec",
+   "size": 5122,
    "kind": "script",
    "entry": false
   },
