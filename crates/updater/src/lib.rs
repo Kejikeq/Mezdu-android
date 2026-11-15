@@ -1,6 +1,7 @@
 //! Content-pack updates from the public release "pack" of this repository (built by .github/workflows/pack.yml from
 //! the game repo). Runs in a background thread at start-up: the new pack is assembled next to the current one
-//! (`pack.next`) and swapped in at the next start, so the game never reads a half-downloaded pack.
+//! (`pack.tmp`, renamed to `pack.next` when complete) and swapped in when the game builds its world again (start
+//! or return from the background), so the game never reads a half-downloaded pack.
 //! Kinds the remote pack lacks (models: only a headless game run can export the instances) are kept from the
 //! current pack; a remote pack that lacks any other kind the current one has (an older export format) is skipped.
 use mezdu_core::{asset_name, sha256_hex, Manifest, Pack};
@@ -69,7 +70,8 @@ pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
     let cur = Pack::open(data_dir.join("pack"))?;
     let remote_json = get(&format!("{PACK_URL}manifest.json"), 1 << 20)?;
     let mut remote = Manifest::parse(&remote_json)?;
-    if remote.commit == cur.manifest.commit {
+    let staged = Pack::open(data_dir.join("pack.next")).map(|p| p.manifest.commit).unwrap_or_default();
+    if remote.commit == cur.manifest.commit || remote.commit == staged {
         return Ok(Outcome::UpToDate);
     }
     let kinds = |m: &Manifest| m.files.iter().map(|f| f.kind.clone()).collect::<HashSet<_>>();
@@ -80,7 +82,8 @@ pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
     }
     // kinds only the installed pack has (models) stay
     let kept: Vec<_> = cur.manifest.files.iter().filter(|f| LOCAL_KINDS.contains(&f.kind.as_str()) && !got.contains(&f.kind)).cloned().collect();
-    let next = data_dir.join("pack.next");
+    // assembled in pack.tmp and renamed to pack.next only when complete: install_staged never sees half a pack
+    let next = data_dir.join("pack.tmp");
     let _ = std::fs::remove_dir_all(&next);
     let write = |rel: &str, data: &[u8]| -> Result<(), String> {
         let p = next.join(rel);
@@ -105,6 +108,9 @@ pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
     }
     remote.files.extend(kept);
     write("manifest.json", &manifest_json(&remote_json, &remote)?)?;
+    let staged = data_dir.join("pack.next");
+    let _ = std::fs::remove_dir_all(&staged);
+    std::fs::rename(&next, &staged).map_err(|e| format!("stage: {e}"))?;
     Ok(Outcome::Staged { commit: remote.commit.clone(), downloaded })
 }
 
@@ -138,7 +144,25 @@ pub fn newer_apk(build: &str) -> Result<Option<String>, String> {
     Ok((!remote.is_empty() && !build.is_empty() && remote != build).then_some(remote))
 }
 
-/// The whole check, for a background thread: pack first, then the APK.
+/// How often a running game looks for a new pack (the CI looks at the game repo every 5 minutes too).
+pub const PERIOD: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// For a background thread: checks now and then every PERIOD for as long as the game runs; `on_apk` gets the
+/// commit of a newer APK once.
+pub fn watch(data_dir: PathBuf, build: &'static str, on_apk: impl Fn(String)) {
+    let mut told = false;
+    loop {
+        if let Some(c) = run(data_dir.clone(), build) {
+            if !told {
+                on_apk(c);
+                told = true;
+            }
+        }
+        std::thread::sleep(PERIOD);
+    }
+}
+
+/// One check: pack first, then the APK.
 pub fn run(data_dir: PathBuf, build: &'static str) -> Option<String> {
     match check_pack(&data_dir) {
         Ok(Outcome::UpToDate) => log::info!("updater: pack is up to date"),

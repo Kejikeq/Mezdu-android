@@ -1,10 +1,10 @@
 # Content pack from the game repo Kejikeq/- (private): needs secret GAME_REPO_TOKEN (fine-grained, read-only Contents on Kejikeq/-).
-# Runs every 30 min; rebuilds only when main of Kejikeq/- has a new commit. Published as release "pack":
+# Runs every 5 min (the shortest GitHub schedule); rebuilds only when main of Kejikeq/- has a new commit. Published as release "pack":
 # every pack file is an asset named path with '/' -> '__' (see mezdu_core::asset_name), plus manifest.json.
 name: pack
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 permissions:
   contents: write

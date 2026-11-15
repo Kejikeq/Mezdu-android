@@ -114,6 +114,11 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
+        // a pack the updater staged while the game ran: installed now, before the world is built again
+        if self.world.is_none() && std::env::var_os("MEZDU_PACK").is_none() && self.data_dir.join("pack.next/manifest.json").exists() {
+            mezdu_updater::install_staged(&self.data_dir);
+            self.reload_pack();
+        }
         let window = match &self.window {
             Some(w) => w.clone(),
             None => {
@@ -273,6 +278,16 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// re-opens the pack after an update; the hero keeps where it stands
+    fn reload_pack(&mut self) {
+        let Ok(p) = Pack::open(self.data_dir.join("pack")) else { return };
+        log::info!("pack {} ({}) loaded", p.manifest.version, &p.manifest.commit[..7.min(p.manifest.commit.len())]);
+        if let (Some(h), Ok(vox)) = (&mut self.hero, Voxels::load(&p)) {
+            h.vox = vox;
+        }
+        self.pack = Some(p);
+    }
+
     fn look(&mut self, dx: f64, dy: f64) {
         if let Some(h) = &mut self.hero {
             h.look[0] += dx as f32;
@@ -350,7 +365,7 @@ pub fn run(event_loop: EventLoop<()>, data_dir: PathBuf) {
         mezdu_updater::install_staged(&data_dir);
         let dir = data_dir.clone();
         let _ = std::thread::Builder::new().name("updater".into()).spawn(move || {
-            mezdu_updater::run(dir, BUILD);
+            mezdu_updater::watch(dir, BUILD, |c| log::info!("a newer APK ({c}) is available"));
         });
     }
     let mut app = App::new(data_dir);
