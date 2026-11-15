@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "c9620f72ee2181f44369a1331f2c1fd90dfb0edb",
- "created": "2026-11-15T20:12:52.719Z",
+ "commit": "8c9dc6ade319691c9a10c55aaf4164ee68cc8ac9",
+ "created": "2026-11-15T20:54:53.042Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -645,6 +645,13 @@
    "path": "script/game/items.js",
    "sha256": "95fe22767a46d2c514c3208a674273dc5c1fb9a6d34d372ff045989a888561db",
    "size": 20413,
+   "kind": "script",
+   "entry": true
+  },
+  {
+   "path": "script/game/play_rules.js",
+   "sha256": "8196329db8d20cef459c1b6c8f883f9f2bebf936c337516900bd70a6afc28f97",
+   "size": 8541,
    "kind": "script",
    "entry": true
   },
