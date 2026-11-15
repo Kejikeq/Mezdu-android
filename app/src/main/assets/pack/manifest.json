@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "16a3b52e1bea2ea536ead1ca208d174a81492abf",
- "created": "2026-11-15T21:17:35.938Z",
+ "commit": "1bd36d44c3eae7164a0fb9f1e0590bed25c7bd1f",
+ "created": "2026-11-15T21:32:25.395Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -378,6 +378,25 @@
    "kind": "mesh",
    "tx": 2,
    "tz": 9
+  },
+  {
+   "path": "models/faces.bin.zst",
+   "sha256": "26810590c207ec16dbf3ada002697bbe724f44c0d33d917a448343b9466c58d1",
+   "size": 2616047,
+   "kind": "models"
+  },
+  {
+   "path": "models/models.json",
+   "sha256": "f25023401b7d1ad32e58e4ca8d3b9c92cc251a896f9ac4063089ab3e3721a9f2",
+   "size": 63232,
+   "kind": "models"
+  },
+  {
+   "path": "models/instances.bin.zst",
+   "sha256": "8be9630d9c04b6a5d976e7f518ea0a14ab5d40898ede4e36cf2533d169d3de6d",
+   "size": 62834,
+   "kind": "models",
+   "count": 4550
   },
   {
    "path": "grass.bin.zst",
@@ -815,25 +834,6 @@
    "size": 10753,
    "kind": "script",
    "entry": false
-  },
-  {
-   "path": "models/faces.bin.zst",
-   "sha256": "a1114596de6fd69d60c7e04255f2622dcf14f4b125ba954609b90f9016844869",
-   "size": 2575017,
-   "kind": "models"
-  },
-  {
-   "path": "models/models.json",
-   "sha256": "f6e32a71f1eecdcb0e4f05e32b3ecd64bd03bc6aa27905feee0f66c1fd85c47a",
-   "size": 61975,
-   "kind": "models"
-  },
-  {
-   "path": "models/instances.bin.zst",
-   "sha256": "4a9975ed9d5cbbed471e16400764a9d51283ced6ebaa6c03165da5e0491d4916",
-   "size": 62834,
-   "kind": "models",
-   "count": 4550
   }
  ],
  "bundled": true
