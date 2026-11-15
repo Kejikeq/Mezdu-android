@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 jni-sys = "0.3"
+# localtime_r: the dates of the saves in the phone's time zone (already in the tree through winit)
+libc = "0.2"
 mezdu-core.workspace = true
 mezdu-gfx.workspace = true
 mezdu-game.workspace = true

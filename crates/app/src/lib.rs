@@ -277,6 +277,29 @@ fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
     }
 }
 
+/// One slot as loadPanel draws it: the number large on the left, the chapter and the details beside it; true when
+/// tapped.
+fn slot_row(ui: &mut egui::Ui, label: &str, title: &str, meta: &str, enabled: bool) -> bool {
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(340.0, 58.0), sense);
+    let v = if enabled { ui.style().interact(&resp) } else { &ui.style().visuals.widgets.noninteractive };
+    let p = ui.painter();
+    p.rect(rect, 14.0, v.bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
+    let fade = if enabled { 1.0 } else { 0.45 };
+    let left = rect.left() + 18.0;
+    p.text(egui::pos2(left, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(26.0), ACCENT.gamma_multiply(fade));
+    p.text(egui::pos2(left + 38.0, rect.top() + 18.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(17.0), INK.gamma_multiply(fade));
+    p.text(egui::pos2(left + 38.0, rect.bottom() - 17.0), egui::Align2::LEFT_CENTER, meta, egui::FontId::proportional(13.0), INK.gamma_multiply(0.55 * fade));
+    enabled && resp.clicked()
+}
+
+/// what the slot screens and the menu show of the saves
+struct SlotsView<'a> {
+    rows: &'a [Option<(String, String)>; 4],
+    confirm: Option<usize>,
+    toast: Option<&'static str>,
+}
+
 type LoadResult = std::sync::mpsc::Receiver<Result<Loaded, String>>;
 /// stage, share done, notes: what the loading screen shows
 type LoadView = (usize, f32, [String; 4]);
@@ -288,13 +311,24 @@ enum Screen {
     Settings,
     Playing,
     Paused,
+    /// the slots to load from (from the menu or the pause)
+    Load,
+    /// the slots 1-3 to save into (from the pause)
+    Save,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Action {
     NewGame,
-    /// the autosave from the menu
+    /// the newest save from the menu
     Continue,
+    OpenLoad,
+    OpenSave,
+    /// a slot picked on the Load or the Save screen (index in save::SLOTS)
+    Slot(usize),
+    AskDelete(usize),
+    Delete(usize),
+    CancelDelete,
     Resume,
     Settings,
     Back,
@@ -336,8 +370,18 @@ pub struct App {
     frozen: Option<f32>,
     /// seconds of play since the last autosave
     save_t: f32,
-    /// an autosave exists: «Продолжить» in the menu
-    saved: bool,
+    /// the saves on disk, read when they change: what the menu and the slot screens show
+    slots: [Option<save::Save>; 4],
+    /// the same as text: (title, details) of every filled slot
+    slot_rows: [Option<(String, String)>; 4],
+    /// the slot whose deletion waits for «Да»
+    confirm: Option<usize>,
+    /// where Back leads from the settings and the slot screens
+    back_to: Screen,
+    /// seconds of play in this game
+    playtime: f64,
+    /// a short message at the top («Сохранено») and when it was shown
+    toast: Option<(&'static str, Instant)>,
     /// commit of a newer APK in the release, set by the updater thread
     apk: Arc<Mutex<Option<String>>>,
     frames: u32,
@@ -368,7 +412,6 @@ impl App {
                 None
             }
         });
-        let saved = save::load(&data_dir).is_some();
         App {
             data_dir,
             pack,
@@ -394,7 +437,12 @@ impl App {
             next_frame: Instant::now(),
             frozen: std::env::var("MEZDU_TIME").ok().and_then(|v| v.parse().ok()),
             save_t: 0.0,
-            saved,
+            slots: [None; 4],
+            slot_rows: Default::default(),
+            confirm: None,
+            back_to: Screen::Menu,
+            playtime: 0.0,
+            toast: None,
             apk,
             frames: 0,
             fps_t: Instant::now(),
@@ -450,7 +498,9 @@ impl App {
                 if self.screen == Screen::Loading {
                     self.screen = Screen::Menu;
                     // the system closed the app during a game: it opens there again, paused
-                    if save::load(&self.data_dir).is_some_and(|s| s.playing) && self.restore() {
+                    self.refresh_slots();
+                    if let Some(s) = save::read(&self.data_dir, "auto").filter(|s| s.playing) {
+                        self.apply(&s);
                         self.screen = Screen::Paused;
                     }
                     // this library started and built the world: the launcher keeps it (crates/launcher)
@@ -478,19 +528,58 @@ impl App {
                     h.player.spawn(&h.vox, x, z, SPAWN[1], SPAWN[3]);
                     log::info!("new game: hero at {:.2?}", h.player.pos);
                     self.screen = Screen::Playing;
+                    self.playtime = 0.0;
                 }
             }
             Action::Continue => {
-                if self.restore() {
+                if let Some((_, s)) = save::latest(&self.data_dir) {
+                    self.apply(&s);
                     self.screen = Screen::Playing;
                 }
+            }
+            Action::OpenLoad | Action::OpenSave => {
+                self.refresh_slots();
+                self.back_to = self.screen;
+                self.confirm = None;
+                self.screen = if a == Action::OpenLoad { Screen::Load } else { Screen::Save };
+            }
+            Action::Slot(i) => {
+                let slot = save::SLOTS[i];
+                match self.screen {
+                    Screen::Load => {
+                        if let Some(s) = self.slots[i] {
+                            log::info!("load slot {slot}");
+                            self.apply(&s);
+                            self.screen = Screen::Playing;
+                        }
+                    }
+                    Screen::Save if i > 0 => {
+                        if self.write_slot_as(slot, true) {
+                            self.toast = Some(("Сохранено", Instant::now()));
+                        }
+                        self.screen = Screen::Paused;
+                    }
+                    _ => {}
+                }
+            }
+            Action::AskDelete(i) => self.confirm = Some(i),
+            Action::CancelDelete => self.confirm = None,
+            Action::Delete(i) => {
+                save::delete(&self.data_dir, save::SLOTS[i]);
+                self.confirm = None;
+                self.refresh_slots();
             }
             Action::Resume => self.screen = Screen::Playing,
             Action::Pause => {
                 self.screen = Screen::Paused;
                 self.autosave();
             }
-            Action::Settings => self.screen = Screen::Settings,
+            Action::Settings => {
+                self.back_to = self.screen;
+                self.screen = Screen::Settings;
+            }
+            // from the settings or the slots: where they were opened
+            Action::Back if self.back_to == Screen::Paused => self.screen = Screen::Paused,
             Action::Back | Action::ToMenu => {
                 if matches!(self.screen, Screen::Playing | Screen::Paused) {
                     self.autosave_as(false);
@@ -514,14 +603,20 @@ impl App {
         self.joystick_reset();
     }
 
-    /// the hero where the autosave left him; false without a save or a hero
-    fn restore(&mut self) -> bool {
-        let (Some(s), Some(h)) = (save::load(&self.data_dir), &mut self.hero) else { return false };
-        h.player.place(s.pos[0], s.pos[1], s.pos[2], s.yaw);
-        h.player.cam_yaw = s.cam_yaw;
-        h.player.cam_pitch = s.cam_pitch;
-        log::info!("autosave: hero at {:.2?}", s.pos);
-        true
+    /// the game where a save left it
+    fn apply(&mut self, s: &save::Save) {
+        if let Some(h) = &mut self.hero {
+            h.player.place(s.pos[0], s.pos[1], s.pos[2], s.yaw);
+            h.player.cam_yaw = s.cam_yaw;
+            h.player.cam_pitch = s.cam_pitch;
+            // the camera behind him at once (it follows smoothly, and a paused game would not move it)
+            for _ in 0..30 {
+                h.player.update_camera(0.1, &Input::default(), &h.vox, false);
+            }
+            log::info!("save: hero at {:.2?}", s.pos);
+        }
+        self.playtime = s.playtime;
+        self.save_t = 0.0;
     }
 
     fn autosave(&mut self) {
@@ -532,10 +627,23 @@ impl App {
 
     fn autosave_as(&mut self, playing: bool) {
         self.save_t = 0.0;
-        if let Some(h) = &self.hero {
-            let p = &h.player;
-            save::store(&self.data_dir, &save::Save { pos: p.pos, yaw: p.yaw, cam_yaw: p.cam_yaw, cam_pitch: p.cam_pitch, playing });
-            self.saved = true;
+        self.write_slot_as("auto", playing);
+    }
+
+    fn write_slot_as(&mut self, slot: &str, playing: bool) -> bool {
+        let Some(h) = &self.hero else { return false };
+        let p = &h.player;
+        let s = save::Save { pos: p.pos, yaw: p.yaw, cam_yaw: p.cam_yaw, cam_pitch: p.cam_pitch, playing, chapter: 1, playtime: self.playtime, time: save::now() };
+        let ok = save::write(&self.data_dir, slot, &s);
+        self.refresh_slots();
+        ok
+    }
+
+    /// reads the slots again (after a write or a deletion, never every frame)
+    fn refresh_slots(&mut self) {
+        for (i, slot) in save::SLOTS.iter().enumerate() {
+            self.slots[i] = save::read(&self.data_dir, slot);
+            self.slot_rows[i] = self.slots[i].map(|s| (format!("Глава {}", s.chapter), format!("{} · {}", save::fmt_playtime(s.playtime), save::fmt_date(s.time))));
         }
     }
 
@@ -550,7 +658,7 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, saved: bool, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
+    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let big = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
             let b = egui::Button::new(egui::RichText::new(text).size(19.0).strong()).min_size(egui::vec2(260.0, 50.0));
             if ui.add_enabled(enabled, b).clicked() {
@@ -560,6 +668,13 @@ impl App {
         let shade = |ctx: &egui::Context, a: u8| {
             ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_rgba_unmultiplied(0x0d, 0x0b, 0x10, a));
         };
+        if let Some(t) = sv.toast {
+            egui::Area::new(egui::Id::unique("toast")).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+                egui::Frame::window(ui.style()).inner_margin(egui::Margin::symmetric(22, 10)).corner_radius(255).show(ui, |ui| {
+                    ui.label(egui::RichText::new(t).size(16.0).color(ACCENT));
+                });
+            });
+        }
         match screen {
             Screen::Loading => {
                 shade(ctx, 255);
@@ -607,10 +722,12 @@ impl App {
                     logo(ui, 52.0, load.0);
                     ui.label(egui::RichText::new("Мир помнит то, что ты забыл.").size(16.0).italics().color(INK.gamma_multiply(0.75)));
                     ui.add_space(22.0);
-                    if saved {
+                    let any = sv.rows.iter().any(Option::is_some);
+                    if any {
                         big(ui, "Продолжить", true, Action::Continue, out);
                     }
                     big(ui, "Начать игру", true, Action::NewGame, out);
+                    big(ui, "Загрузить", any, Action::OpenLoad, out);
                     big(ui, "Настройки", true, Action::Settings, out);
                     #[cfg(not(target_os = "android"))]
                     big(ui, "Выход", true, Action::Quit, out);
@@ -670,8 +787,51 @@ impl App {
                         ui.label(egui::RichText::new("Пауза").size(36.0).strong());
                         ui.add_space(16.0);
                         big(ui, "Продолжить", true, Action::Resume, out);
+                        big(ui, "Сохранить", true, Action::OpenSave, out);
+                        big(ui, "Загрузить", true, Action::OpenLoad, out);
                         big(ui, "Настройки", true, Action::Settings, out);
                         big(ui, "В главное меню", true, Action::ToMenu, out);
+                    });
+                });
+            }
+            Screen::Load | Screen::Save => {
+                shade(ctx, 0xb0);
+                let saving = screen == Screen::Save;
+                egui::Area::new(egui::Id::unique("slots")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
+                    egui::Frame::window(ui.style()).inner_margin(24.0).corner_radius(18.0).show(ui, |ui| {
+                        // room for the «Удалить · Нет» of a deletion: the window does not jump when it shows
+                        ui.set_width(520.0);
+                        ui.label(egui::RichText::new(if saving { "Сохранить" } else { "Загрузить" }).size(28.0).strong());
+                        ui.add_space(6.0);
+                        // loadPanel of the web game: the autosave «А» only to load from, slots 1-3 both ways
+                        for (i, row) in sv.rows.iter().enumerate() {
+                            if saving && i == 0 {
+                                continue;
+                            }
+                            let label = if i == 0 { "А" } else { save::SLOTS[i] };
+                            let name = if i == 0 { "Автосохранение".to_string() } else { format!("Слот {label}") };
+                            let (title, meta) = row.as_ref().map_or(("Пусто", name.as_str()), |(t, m)| (t.as_str(), m.as_str()));
+                            ui.horizontal(|ui| {
+                                if slot_row(ui, label, title, meta, saving || row.is_some()) {
+                                    out.push(Action::Slot(i));
+                                }
+                                if !saving && row.is_some() {
+                                    if sv.confirm == Some(i) {
+                                        let yes = egui::Button::new(egui::RichText::new("Удалить").color(egui::Color32::from_rgb(0xe0, 0x50, 0x3f)));
+                                        if ui.add(yes).clicked() {
+                                            out.push(Action::Delete(i));
+                                        }
+                                        if ui.button("Нет").clicked() {
+                                            out.push(Action::CancelDelete);
+                                        }
+                                    } else if ui.add(egui::Button::new(egui::RichText::new("Удалить").size(14.0).color(INK.gamma_multiply(0.7))).min_size(egui::vec2(0.0, 40.0))).clicked() {
+                                        out.push(Action::AskDelete(i));
+                                    }
+                                }
+                            });
+                        }
+                        ui.add_space(10.0);
+                        big(ui, "Назад", true, Action::Back, out);
                     });
                 });
             }
@@ -790,7 +950,7 @@ impl ApplicationHandler for App {
                     match self.screen {
                         Screen::Playing => self.act(Action::Pause, el),
                         Screen::Paused => self.act(Action::Resume, el),
-                        Screen::Settings => self.act(Action::Back, el),
+                        Screen::Settings | Screen::Load | Screen::Save => self.act(Action::Back, el),
                         _ => {}
                     }
                     return;
@@ -840,6 +1000,7 @@ impl App {
                 }
                 if playing {
                     self.save_t += dt;
+                    self.playtime += dt as f64;
                     let inp = Input { mv, look: h.look, run: self.keys[6] };
                     h.look = [0.0; 2];
                     h.player.update(dt, &inp, &h.vox);
@@ -868,14 +1029,18 @@ impl App {
         }
         let info = self.sys_info();
         let apk = self.apk.lock().ok().and_then(|a| a.clone());
-        let (screen, err, saved) = (self.screen, self.load_error.clone(), self.saved);
+        let (screen, err) = (self.screen, self.load_error.clone());
+        if self.toast.is_some_and(|(_, t)| t.elapsed().as_secs_f32() > 2.0) {
+            self.toast = None;
+        }
+        let sv = SlotsView { rows: &self.slot_rows, confirm: self.confirm, toast: self.toast.map(|t| t.0) };
         let lt = self.loading_frames as f32 / 30.0;
         let ls = self.loading.as_ref().and_then(|(s, _)| s.lock().ok().map(|s| (s.stage, s.frac, s.notes.clone())));
         let mut actions = Vec::new();
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, saved, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
         for a in actions {
             self.act(a, el);

@@ -60,6 +60,9 @@ impl Ui {
             w.corner_radius = egui::CornerRadius::same(255);
             w.fg_stroke = egui::Stroke::new(1.0, INK);
         }
+        // text is to be read, not selected (egui selects labels by default)
+        style.interaction.selectable_labels = false;
+        style.interaction.multi_widget_text_select = false;
         style.spacing.button_padding = egui::vec2(22.0, 12.0);
         style.spacing.item_spacing = egui::vec2(10.0, 12.0);
         style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(18.0));
