@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "e1ba6b350c46a042c5bc61273c53dcd2d770687e",
- "created": "2026-11-15T02:33:24.716Z",
+ "commit": "262b70361c1be35ef2ed11a08ef4468a21340781",
+ "created": "2026-11-15T16:02:52.644Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -453,6 +453,181 @@
    "kind": "frame",
    "chapter": 10,
    "sky": "dusk"
+  },
+  {
+   "path": "script/engine/math.js",
+   "sha256": "d4affa59466b119f649d67cdf9419f9873b9536ec98e6d735141f11b6719929c",
+   "size": 8175,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/engine/noise.js",
+   "sha256": "70c7916ba8faf33027cbc89c9bba6c4acc23b5c91e29a7402e612033f30ede60",
+   "size": 2520,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/chapters_data.js",
+   "sha256": "0af280513c900e9ba531f0b2db479858626412c109a3549b356bf1fc88bfff08",
+   "size": 90076,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/interaction_los.js",
+   "sha256": "6cd6f998e86a34701b41718bfb3db73818b18e626ea3e00d02237131ee2fca79",
+   "size": 5079,
+   "kind": "script",
+   "entry": true
+  },
+  {
+   "path": "script/game/items.js",
+   "sha256": "95fe22767a46d2c514c3208a674273dc5c1fb9a6d34d372ff045989a888561db",
+   "size": 20413,
+   "kind": "script",
+   "entry": true
+  },
+  {
+   "path": "script/game/story.js",
+   "sha256": "4214886782ebb6376e0628a9ca549865604f0617f901a7d1a21adcd44975eac5",
+   "size": 11640,
+   "kind": "script",
+   "entry": true
+  },
+  {
+   "path": "script/game/story/ch1.js",
+   "sha256": "7038186ab26184d72492c8456bdb106bf11260e997a2023dcd313df598283fee",
+   "size": 61949,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch10.js",
+   "sha256": "7d834a4aee18132720f22ec8ba50f131fbf281c20af579448f70d8f3ab7fc150",
+   "size": 7783,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch2.js",
+   "sha256": "1150c226befd7cce5c9250e3ddd142b0d3d84a1568e3b5e222b8514a51b68445",
+   "size": 7580,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch3.js",
+   "sha256": "9487e84468378bf17d2623e4d8b0a207e71c109943fd1a42b4e9e9bd305c596f",
+   "size": 7111,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch4.js",
+   "sha256": "c2c23f2165f5685c70992fb51280f0ffe5e9b8321b1e8baf2c2f50eb8771484d",
+   "size": 6968,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch5.js",
+   "sha256": "8fe2879882a5e81c7f2190e925be7c12a9e7726cc4c041809063233ba3b0ccea",
+   "size": 12179,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch6.js",
+   "sha256": "7a6a8aca43df4aa79b744729406e3342971fa4f92bb5aa052fea78c1de6fedc9",
+   "size": 25403,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch7.js",
+   "sha256": "17b1cb905089ecd70b4b88b94a06a01c3765317d33b48573d6524a86b32b5aef",
+   "size": 10118,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch8.js",
+   "sha256": "bdfae444e2d6c1ad6d2771104d08d6c6b48da334024c0602b4baeac5188d82b0",
+   "size": 4857,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/ch9.js",
+   "sha256": "c63b8de3d5f06d0d62580ad6b2b21c043332484c445520ed9016a1edc2208d27",
+   "size": 7110,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/common.js",
+   "sha256": "784085cfd6cd9dc0d223389e716e77eecb7f6a934cd3ac42cb58e88dae406808",
+   "size": 640,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/dialogue.js",
+   "sha256": "9eefc2a820ba3321aaa64f4e51ade875aa69e700e0d578b207e4c10fef34a278",
+   "size": 8655,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/endings.js",
+   "sha256": "5cc1f7e15e9a7643917345515eb4054eb5caf32ad155657847ad3f3ee3d8eb94",
+   "size": 8233,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/figures.js",
+   "sha256": "454a4b455cafeb6c6284a52ba86a36188bcbd472771374ecb6c8f4b18ade84fa",
+   "size": 1722,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/intro.js",
+   "sha256": "937d7d34d0e65c34fdd3c8d56ecac4f79707242351ce9105cda842a502dccae6",
+   "size": 2561,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/progression.js",
+   "sha256": "ffb2ae08e574cebe9a5d18fe88b94021d01620c184039ce8559520e36a802edf",
+   "size": 5800,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/game/story/seat.js",
+   "sha256": "8dd5a7f21587628f2a93ec0900779147e9ef99cb02892c7f831276d745a60dee",
+   "size": 2087,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/gfx/sky.js",
+   "sha256": "42be63fb8aed8fc548a6ec154fceaf915a19f14ec8f4f5a45c0b3e62e703abf7",
+   "size": 8341,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/world/layout.js",
+   "sha256": "31f7ab24b9804eb9ac35c4e2185cdd5bb315c6294bd125b5e23c94d7ac0e1f50",
+   "size": 31328,
+   "kind": "script",
+   "entry": false
   },
   {
    "path": "models/faces.bin.zst",

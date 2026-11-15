@@ -1,0 +1,99 @@
+// Sky and time of day (docs/tasks/render.md, «Освещение → IBL + солнце»).
+// A preset describes the sky dome, the sun, the fog and the exposure of a time of day. The dome formula below
+// (skyRad) has a twin in the shaders (skyDome in src/gfx/wgsl.js): the visible sky, the reflection cubemap and the
+// diffuse environment light (SH9, computed here) all come from the same few parameters.
+const dir = (x, y, z) => { const l = Math.hypot(x, y, z); return [x / l, y / l, z / l]; };
+
+// zen / hor / away: sky radiance at the zenith, at the horizon towards the sun and at the horizon opposite to it
+// (low sun: warm on one side, cool on the other); stars: 0..1; dark: 0 day .. 1 night (fireflies out, butterflies asleep);
+// key: how bright the automatic exposure makes the frame (1 = day; dusk and night stay darker); gnd: light bounced by the ground (the lower half of the
+// environment); glow: the aureole around the sun; sun: direct light (pi-less: diffuse = albedo * sun * n.l);
+// fog: colour + density; exposure: nominal exposure; ev: scene EV limits (the automatic exposure may move
+// half of that range away from the nominal value).
+export const SKIES = {
+  morning: { sunDir: dir(0.78, 0.30, 0.55), sun: [2.1, 1.86, 1.48], zen: [0.4, 0.58, 0.92], hor: [0.98, 0.99, 0.98], gnd: [0.21, 0.2, 0.15], glow: [1.0, 0.84, 0.58], fog: [0.40, 0.41, 0.41, 0.018], exposure: 1.8, ev: [10, 14], away: [0.82, 0.9, 1.0], stars: 0, dark: 0, key: 1 },
+  day: { sunDir: dir(0.45, 0.72, 0.52), sun: [2.0, 1.95, 1.85], zen: [0.28, 0.5, 1.0], hor: [0.84, 0.95, 1.1], gnd: [0.2, 0.2, 0.17], glow: [1.0, 0.92, 0.75], fog: [0.36, 0.38, 0.41, 0.016], exposure: 1.71, ev: [10, 14], away: [0.8, 0.93, 1.1], stars: 0, dark: 0, key: 1 },
+  overcast: { sunDir: dir(0.4, 0.7, 0.5), sun: [0.5, 0.5, 0.52], zen: [0.55, 0.58, 0.62], hor: [0.64, 0.66, 0.68], gnd: [0.14, 0.14, 0.13], glow: [0.18, 0.18, 0.18], fog: [0.4, 0.42, 0.44, 0.03], exposure: 2.07, ev: [9, 12], away: [0.62, 0.64, 0.67], stars: 0, dark: 0.15, key: 0.9 },
+  dusk: { sunDir: dir(-0.7, 0.12, 0.5), sun: [0.26, 0.23, 0.29], zen: [0.1, 0.13, 0.22], hor: [0.44, 0.31, 0.27], gnd: [0.05, 0.05, 0.055], glow: [0.34, 0.2, 0.15], fog: [0.16, 0.16, 0.19, 0.035], exposure: 2.88, ev: [8, 11], away: [0.17, 0.2, 0.3], stars: 0.35, dark: 0.8, key: 0.5 },
+  sunset: { sunDir: dir(-0.82, 0.13, 0.4), sun: [2.0, 1.05, 0.46], zen: [0.18, 0.28, 0.6], hor: [1.25, 0.62, 0.26], gnd: [0.16, 0.11, 0.07], glow: [1.3, 0.6, 0.2], fog: [0.52, 0.36, 0.26, 0.02], exposure: 1.98, ev: [8, 11], away: [0.5, 0.42, 0.58], stars: 0.06, dark: 0.45, key: 0.85 },
+  night: { sunDir: dir(-0.35, 0.62, -0.5), sun: [0.1, 0.13, 0.2], zen: [0.012, 0.018, 0.04], hor: [0.03, 0.04, 0.07], gnd: [0.006, 0.007, 0.01], glow: [0.05, 0.06, 0.09], fog: [0.022, 0.028, 0.045, 0.03], exposure: 3.96, ev: [3, 6], away: [0.024, 0.032, 0.06], stars: 1, dark: 1, key: 0.6 },
+  nightmare: { sunDir: dir(0.78, 0.30, 0.55), sun: [0.55, 0.1, 0.07], zen: [0.045, 0.03, 0.055], hor: [0.174, 0.031, 0.025], gnd: [0.035, 0.02, 0.02], glow: [0.59, 0.087, 0.043], fog: [0.085, 0.035, 0.03, 0.05], exposure: 1.4, ev: [8, 9], away: [0.09, 0.02, 0.022], stars: 0, dark: 1, key: 0.8 }, // a narrow EV range: the nightmare stays dark
+  void: { sunDir: dir(0.78, 0.30, 0.55), sun: [0, 0, 0], zen: [0.004, 0.004, 0.005], hor: [0.006, 0.005, 0.006], gnd: [0.004, 0.003, 0.004], glow: [0, 0, 0], fog: [0.006, 0.004, 0.006, 0.05], exposure: 2.16, ev: [3, 6], away: [0.006, 0.005, 0.006], stars: 0, dark: 1, key: 0.6 },
+};
+// Monday morning ... Sunday 03:17, «Между»
+export const CHAPTER_SKY = { 1: 'morning', 2: 'day', 3: 'day', 4: 'overcast', 5: 'dusk', 6: 'morning', 7: 'day', 8: 'sunset', 9: 'night', 10: 'dusk' };
+
+// radiance of the dome in direction (x, y, z), without the sun disc; the shader twin is skyDome()
+export function skyRad(P, x, y, z, out) {
+  const up = Math.max(y, 0), k = 1 - (1 - up) * (1 - up);
+  let g = Math.min(1, Math.max(0, (y + 0.25) / 0.25)); g = 1 - g * g * (3 - 2 * g);
+  const s = Math.max(x * P.sunDir[0] + y * P.sunDir[1] + z * P.sunDir[2], 0), s2 = s * s, s4 = s2 * s2, s16 = s4 * s4 * s4 * s4;
+  const gl = s4 * 0.38 + s16 * s16 * 0.95;
+  const fl = Math.hypot(P.sunDir[0], P.sunDir[2]) || 1;
+  let side = 0.5 + 0.5 * (x * P.sunDir[0] + z * P.sunDir[2]) / fl; side *= side;
+  for (let i = 0; i < 3; i++) {
+    const hor = P.away[i] + (P.hor[i] - P.away[i]) * side;
+    const c = hor + (P.zen[i] - hor) * k + P.glow[i] * gl;
+    out[i] = c + (P.gnd[i] - c) * g;
+  }
+  return out;
+}
+
+// Diffuse environment light: SH9 of the dome convolved with the cosine lobe, pi-less, with the basis constants
+// folded in. The shader evaluates  c0 + c1*y + c2*z + c3*x + c4*xy + c5*yz + c6*(3zz-1) + c7*xz + c8*(xx-yy).
+const SH_K = [0.282095, 0.488603, 0.488603, 0.488603, 1.092548, 1.092548, 0.315392, 1.092548, 0.546274];
+const SH_A = [1, 2 / 3, 2 / 3, 2 / 3, 1 / 4, 1 / 4, 1 / 4, 1 / 4, 1 / 4];
+export function skySH(P, out = new Float32Array(36)) {
+  out.fill(0);
+  const NT = 24, NP = 48, c = [0, 0, 0], b = new Float64Array(9);
+  for (let i = 0; i < NT; i++) {
+    const th = (i + 0.5) / NT * Math.PI, st = Math.sin(th), y = Math.cos(th);
+    const dw = (Math.PI / NT) * (2 * Math.PI / NP) * st;
+    for (let j = 0; j < NP; j++) {
+      const ph = (j + 0.5) / NP * 2 * Math.PI, x = st * Math.cos(ph), z = st * Math.sin(ph);
+      skyRad(P, x, y, z, c);
+      b[0] = 1; b[1] = y; b[2] = z; b[3] = x; b[4] = x * y; b[5] = y * z; b[6] = 3 * z * z - 1; b[7] = x * z; b[8] = x * x - y * y;
+      for (let k = 0; k < 9; k++) { const w = b[k] * SH_K[k] * dw; out[k * 4] += c[0] * w; out[k * 4 + 1] += c[1] * w; out[k * 4 + 2] += c[2] * w; }
+    }
+  }
+  for (let k = 0; k < 9; k++) { const f = SH_K[k] * SH_A[k]; out[k * 4] *= f; out[k * 4 + 1] *= f; out[k * 4 + 2] *= f; }
+  return out;
+}
+export function shEval(sh, x, y, z, out) {
+  const b = [1, y, z, x, x * y, y * z, 3 * z * z - 1, x * z, x * x - y * y];
+  for (let i = 0; i < 3; i++) { let v = 0; for (let k = 0; k < 9; k++) v += sh[k * 4 + i] * b[k]; out[i] = Math.max(v, 0); }
+  return out;
+}
+
+// Per preset, computed once: SH9 and the light of the sky on an upward / a downward surface (for the shaders that
+// still use the two-colour hemisphere: grass, particles, fog).
+const cache = new Map();
+function prep(name) {
+  let e = cache.get(name);
+  if (!e) {
+    const P = SKIES[name], sh = skySH(P);
+    e = { name, P, sh, up: shEval(sh, 0, 1, 0, [0, 0, 0, 0]), down: shEval(sh, 0, -1, 0, [0, 0, 0, 0]), sun: [P.sun[0], P.sun[1], P.sun[2], 0],
+      sky: new Float32Array([P.zen[0], P.zen[1], P.zen[2], 0, P.hor[0], P.hor[1], P.hor[2], 0, P.gnd[0], P.gnd[1], P.gnd[2], 0, P.glow[0], P.glow[1], P.glow[2], 0]),
+      skyX: new Float32Array([P.away[0], P.away[1], P.away[2], P.stars]) };
+    cache.set(name, e);
+  }
+  return e;
+}
+
+// The lighting state of a frame (the object is reused: no allocations per frame).
+// inside: the hero is in a room (less sky light, thinner fog); headache: 0..1 (story effect on the fog).
+const L = { sunDir: null, sunD: null, sunN: null, skyD: [0, 0, 0, 0], skyN: [0, 0, 0, 0], gndD: [0, 0, 0, 0], gndN: [0, 0, 0, 0], fogD: [0, 0, 0, 0], fogN: [0, 0, 0, 0],
+  fogP: [7.0, 0.16, 0.5, 58], exposure: 1, exposureN: 1, evRange: 2, evRangeN: 0.5, key: 1, keyN: 1, amb: 1, dark: 0, envD: null, envN: null };
+export function lightFor(chapter, inside, headache, isVoid) {
+  const d = prep(isVoid ? 'void' : (CHAPTER_SKY[chapter] || 'day')), n = prep(isVoid ? 'void' : 'nightmare');
+  const amb = inside ? 0.45 : 1, fogScale = inside ? 0.28 : 1, h = headache || 0;
+  L.sunDir = d.P.sunDir; L.sunD = d.sun; L.sunN = n.sun; L.envD = d; L.envN = n; L.amb = amb;
+  for (let i = 0; i < 3; i++) { L.skyD[i] = d.up[i] * amb; L.skyN[i] = n.up[i] * amb; L.gndD[i] = d.down[i] * amb; L.gndN[i] = n.down[i] * amb; }
+  const fd = d.P.fog, fn = n.P.fog;
+  L.fogD[0] = fd[0] * (1 - h * 0.3); L.fogD[1] = fd[1] * (1 - h * 0.35); L.fogD[2] = fd[2] * (1 - h * 0.25); L.fogD[3] = fd[3] * fogScale * (1 + h * 3);
+  L.fogN[0] = fn[0]; L.fogN[1] = fn[1]; L.fogN[2] = fn[2]; L.fogN[3] = fn[3] * (isVoid ? 1 : fogScale * (1 + h * 2));
+  L.dark = d.P.dark; L.key = d.P.key; L.keyN = n.P.key;
+  L.exposure = d.P.exposure; L.exposureN = n.P.exposure; L.evRangeN = (n.P.ev[1] - n.P.ev[0]) / 2;
+  L.evRange = inside ? 1.5 : (d.P.ev[1] - d.P.ev[0]) / 2;
+  return L;
+}
