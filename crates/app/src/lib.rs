@@ -79,7 +79,7 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
             set(0, d as f32 / t.max(1) as f32);
             note(0, format!("скачивается: {d} из {t}"));
         }) {
-            Ok(mezdu_updater::Outcome::Staged { commit, downloaded }) => note(0, format!("установлено обновление {} ({downloaded} файлов)", &commit[..7.min(commit.len())])),
+            Ok(mezdu_updater::Outcome::Staged { commit, downloaded, dropped }) => note(0, format!("установлено обновление {}: скачано файлов {downloaded}, удалено {dropped}", &commit[..7.min(commit.len())])),
             Ok(mezdu_updater::Outcome::UpToDate) => note(0, "установлена последняя версия".into()),
             Ok(mezdu_updater::Outcome::Skipped(_)) => note(0, "установлена последняя версия".into()),
             Err(e) => {

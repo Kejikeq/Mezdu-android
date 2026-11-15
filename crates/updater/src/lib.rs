@@ -19,7 +19,7 @@ const LOCAL_KINDS: [&str; 1] = ["models"];
 pub enum Outcome {
     UpToDate,
     /// a new pack waits in `pack.next` and is installed at the next start
-    Staged { commit: String, downloaded: usize },
+    Staged { commit: String, downloaded: usize, dropped: usize },
     /// the remote pack is of an older export format than the installed one
     Skipped(String),
 }
@@ -67,6 +67,7 @@ pub fn install_staged(data_dir: &Path) {
 
 /// Compares the release with the installed pack and stages the new one when it is newer and complete.
 pub fn check_pack(data_dir: &Path) -> Result<Outcome, String> {
+    // (a start-up check: the loading screen uses update_now)
     check_pack_with(data_dir, &|_, _| {})
 }
 
@@ -105,54 +106,70 @@ pub fn repair(data_dir: &Path, bad: &[String]) -> Result<usize, String> {
     Ok(n)
 }
 
+/// File by file against the release: a file missing here or with another sha256 is downloaded, a file the release
+/// no longer has is dropped (except the kinds only this device has, `LOCAL_KINDS`), unchanged ones are linked from
+/// the installed pack. The result is staged in pack.next (complete or not at all).
 fn check_pack_with(data_dir: &Path, progress: &dyn Fn(usize, usize)) -> Result<Outcome, String> {
-    let cur = Pack::open(data_dir.join("pack"))?;
+    let cur = Pack::open(data_dir.join("pack")).ok();
     let remote_json = get(&format!("{PACK_URL}manifest.json"), 1 << 20)?;
     let mut remote = Manifest::parse(&remote_json)?;
-    let staged = Pack::open(data_dir.join("pack.next")).map(|p| p.manifest.commit).unwrap_or_default();
-    if remote.commit == cur.manifest.commit || remote.commit == staged {
-        return Ok(Outcome::UpToDate);
-    }
-    let kinds = |m: &Manifest| m.files.iter().map(|f| f.kind.clone()).collect::<HashSet<_>>();
-    let (have, got) = (kinds(&cur.manifest), kinds(&remote));
+    let empty = Vec::new();
+    let local = cur.as_ref().map_or(&empty, |p| &p.manifest.files);
+    let kinds = |files: &[mezdu_core::FileEntry]| files.iter().map(|f| f.kind.clone()).collect::<HashSet<_>>();
+    let (have, got) = (kinds(local), kinds(&remote.files));
     let missing: Vec<_> = have.iter().filter(|k| !got.contains(*k) && !LOCAL_KINDS.contains(&k.as_str())).cloned().collect();
     if !missing.is_empty() {
         return Ok(Outcome::Skipped(format!("release pack {} has no {}", &remote.commit[..7.min(remote.commit.len())], missing.join(", "))));
     }
     // kinds only the installed pack has (models) stay
-    let kept: Vec<_> = cur.manifest.files.iter().filter(|f| LOCAL_KINDS.contains(&f.kind.as_str()) && !got.contains(&f.kind)).cloned().collect();
+    let kept: Vec<_> = local.iter().filter(|f| LOCAL_KINDS.contains(&f.kind.as_str()) && !got.contains(&f.kind)).cloned().collect();
+    let target: Vec<_> = remote.files.iter().chain(kept.iter()).cloned().collect();
+    let same = |a: &[mezdu_core::FileEntry], f: &mezdu_core::FileEntry| a.iter().any(|c| c.path == f.path && c.sha256 == f.sha256);
+    let fetch: Vec<_> = target.iter().filter(|f| !same(local, f)).collect();
+    let dropped = local.iter().filter(|f| !target.iter().any(|t| t.path == f.path)).count();
+    let commit_same = cur.as_ref().is_some_and(|p| p.manifest.commit == remote.commit);
+    if fetch.is_empty() && dropped == 0 && commit_same {
+        return Ok(Outcome::UpToDate);
+    }
+    // already staged by an earlier check: nothing to do until it is installed
+    if let Ok(st) = Pack::open(data_dir.join("pack.next")) {
+        if st.manifest.files.len() == target.len() && target.iter().all(|f| same(&st.manifest.files, f)) {
+            return Ok(Outcome::UpToDate);
+        }
+    }
     // assembled in pack.tmp and renamed to pack.next only when complete: install_staged never sees half a pack
     let next = data_dir.join("pack.tmp");
     let _ = std::fs::remove_dir_all(&next);
-    let write = |rel: &str, data: &[u8]| -> Result<(), String> {
+    let dest = |rel: &str| -> Result<PathBuf, String> {
         let p = next.join(rel);
         std::fs::create_dir_all(p.parent().unwrap_or(&next)).map_err(|e| e.to_string())?;
-        std::fs::write(&p, data).map_err(|e| format!("{rel}: {e}"))
+        Ok(p)
     };
     let mut downloaded = 0;
-    let to_fetch = remote.files.iter().filter(|f| cur.manifest.files.iter().all(|c| c.path != f.path || c.sha256 != f.sha256)).count();
-    for f in remote.files.iter().chain(kept.iter()) {
-        let local = cur.read(&f.path).ok().filter(|d| d.len() as u64 == f.size && sha256_hex(d) == f.sha256);
-        let data = match local {
-            Some(d) => d,
-            None => {
-                let d = get(&format!("{PACK_URL}{}", asset_name(&f.path)), f.size + 1)?;
-                if sha256_hex(&d) != f.sha256 {
-                    return Err(format!("{}: hash mismatch", f.path));
-                }
-                downloaded += 1;
-                progress(downloaded, to_fetch);
-                d
+    for f in &target {
+        let p = dest(&f.path)?;
+        if same(local, f) {
+            // unchanged: a hard link to the installed file (a copy where links are not possible)
+            let src = data_dir.join("pack").join(&f.path);
+            if std::fs::hard_link(&src, &p).is_err() {
+                std::fs::copy(&src, &p).map_err(|e| format!("{}: {e}", f.path))?;
             }
-        };
-        write(&f.path, &data)?;
+            continue;
+        }
+        let d = get(&format!("{PACK_URL}{}", asset_name(&f.path)), f.size + 1)?;
+        if sha256_hex(&d) != f.sha256 {
+            return Err(format!("{}: hash mismatch", f.path));
+        }
+        std::fs::write(&p, &d).map_err(|e| format!("{}: {e}", f.path))?;
+        downloaded += 1;
+        progress(downloaded, fetch.len());
     }
     remote.files.extend(kept);
-    write("manifest.json", &manifest_json(&remote_json, &remote)?)?;
+    std::fs::write(dest("manifest.json")?, manifest_json(&remote_json, &remote)?).map_err(|e| e.to_string())?;
     let staged = data_dir.join("pack.next");
     let _ = std::fs::remove_dir_all(&staged);
     std::fs::rename(&next, &staged).map_err(|e| format!("stage: {e}"))?;
-    Ok(Outcome::Staged { commit: remote.commit.clone(), downloaded })
+    Ok(Outcome::Staged { commit: remote.commit.clone(), downloaded, dropped })
 }
 
 /// the remote manifest with the kept local files appended to its file list
@@ -208,7 +225,7 @@ pub fn watch(data_dir: PathBuf, build: &'static str, on_apk: impl Fn(String)) {
 pub fn run(data_dir: PathBuf, build: &'static str) -> Option<String> {
     match check_pack(&data_dir) {
         Ok(Outcome::UpToDate) => log::info!("updater: pack is up to date"),
-        Ok(Outcome::Staged { commit, downloaded }) => log::info!("updater: pack {commit} staged ({downloaded} files downloaded), installed at the next start"),
+        Ok(Outcome::Staged { commit, downloaded, dropped }) => log::info!("updater: pack {commit} staged ({downloaded} files downloaded, {dropped} dropped), installed at the next loading"),
         Ok(Outcome::Skipped(why)) => log::info!("updater: skipped: {why}"),
         Err(e) => log::warn!("updater: pack: {e}"),
     }

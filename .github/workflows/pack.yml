@@ -54,10 +54,12 @@ jobs:
           if git diff --cached --quiet; then echo "bundled pack unchanged"; exit 0; fi
           git commit -m "build: bundled pack $(git -C game rev-parse --short HEAD)"
           for i in 1 2 3; do git pull --rebase -q origin main && git push origin HEAD:main && break; sleep 5; done
-      - uses: softprops/action-gh-release@v2
+      - name: publish release "pack" (data files first, manifest.json last)
         if: steps.cmp.outputs.skip != '1'
-        with:
-          tag_name: pack
-          name: Контент-пак (последний)
-          make_latest: false
-          files: flat/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view pack >/dev/null 2>&1 || gh release create pack --title "Контент-пак (последний)" --notes "Собирается из main Kejikeq/-" --latest=false
+          # a phone reading manifest.json must find every file it names: the manifest goes up only after them
+          ls flat | grep -v '^manifest.json$' | sed 's|^|flat/|' | xargs -n 40 gh release upload pack --clobber
+          gh release upload pack flat/manifest.json --clobber
