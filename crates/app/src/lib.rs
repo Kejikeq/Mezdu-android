@@ -163,6 +163,8 @@ pub struct App {
     loading: Option<(Arc<Mutex<LoadState>>, LoadResult)>,
     loading_frames: u32,
     load_error: Option<String>,
+    /// what the last loading found: updates, integrity (shown in the menu and the settings)
+    load_notes: [String; 4],
     screen: Screen,
     hero: Option<Hero>,
     cam: Camera,
@@ -218,6 +220,7 @@ impl App {
             loading: None,
             loading_frames: 0,
             load_error: None,
+            load_notes: Default::default(),
             screen: Screen::Loading,
             hero,
             cam: Camera { pos: glam::Vec3::new(MENU_CAM[0], MENU_CAM[1], MENU_CAM[2]), yaw: MENU_CAM[3], pitch: MENU_CAM[4], fov_y: 1.0 },
@@ -240,8 +243,10 @@ impl App {
 
     fn sys_info(&self) -> String {
         let g = self.gfx.as_ref().map(|g| format!("{:?} · {}", g.backend, g.adapter_name)).unwrap_or_default();
-        let p = self.pack.as_ref().map(|p| format!("пак {} ({})", p.manifest.version, &p.manifest.commit[..7.min(p.manifest.commit.len())])).unwrap_or_else(|| "без пака".into());
-        format!("{g} · {:.0} FPS · {p}", self.fps)
+        let p = self.pack.as_ref().map(|p| format!("пак {} · {} файлов", &p.manifest.commit[..7.min(p.manifest.commit.len())], p.manifest.files.len())).unwrap_or_else(|| "без пака".into());
+        let build = if BUILD.is_empty() { "локальная" } else { BUILD };
+        let upd = if self.load_notes[0].is_empty() { String::new() } else { format!("\nобновление: {} · целостность: {}", self.load_notes[0], self.load_notes[1]) };
+        format!("сборка {build} · {g} · {:.0} FPS · {p}{upd}", self.fps)
     }
 
     fn start_loading(&mut self) {
@@ -261,6 +266,9 @@ impl App {
     fn poll_loading(&mut self) {
         let Some((_, rx)) = &self.loading else { return };
         let Ok(r) = rx.try_recv() else { return };
+        if let Some(n) = self.loading.as_ref().and_then(|(s, _)| s.lock().ok().map(|s| s.notes.clone())) {
+            self.load_notes = n;
+        }
         self.loading = None;
         match r {
             Ok(l) => {
@@ -416,8 +424,10 @@ impl App {
                         big(ui, "Скачать и установить", true, Action::UpdateApk, out);
                     }
                 });
-                egui::Area::new(egui::Id::unique("foot")).anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(48.0, -16.0)).order(egui::Order::Background).show(ctx, |ui| {
-                    ui.label(egui::RichText::new(info).size(12.0).color(INK.gamma_multiply(0.45)));
+                egui::Area::new(egui::Id::unique("foot")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-20.0, -14.0)).order(egui::Order::Background).show(ctx, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+                        ui.label(egui::RichText::new(info).size(11.0).color(INK.gamma_multiply(0.6)));
+                    });
                 });
             }
             Screen::Settings => {
