@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "262b70361c1be35ef2ed11a08ef4468a21340781",
- "created": "2026-11-15T16:02:52.644Z",
+ "commit": "72fbf440c4e0f05bbeb39a69e9fb3175c5badc9d",
+ "created": "2026-11-15T16:24:55.277Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -453,6 +453,146 @@
    "kind": "frame",
    "chapter": 10,
    "sky": "dusk"
+  },
+  {
+   "path": "edit/ch1Door.vox.zst",
+   "sha256": "74c8780e5132fbdff2fc791466ca63d34a387cc7eb81314e258f3f43cb5c9fb6",
+   "size": 80,
+   "kind": "edit",
+   "name": "ch1Door"
+  },
+  {
+   "path": "edit/ch1Door.mesh.zst",
+   "sha256": "42d08fd3e55d28999d29f2b43a20321f17d997eab06be9bb9267d32f09f5a12e",
+   "size": 18160,
+   "kind": "edit",
+   "name": "ch1Door"
+  },
+  {
+   "path": "edit/ch2Door.vox.zst",
+   "sha256": "e6874840ab79d5a00843e0f128005c3ff05b5f068bd27cd9d86f0a76f0c8d138",
+   "size": 98,
+   "kind": "edit",
+   "name": "ch2Door"
+  },
+  {
+   "path": "edit/ch2Door.mesh.zst",
+   "sha256": "581a49ff35d7cab69ed1403cbad5126b9b9fe3a4388f52ef0d938bd54437706c",
+   "size": 5047,
+   "kind": "edit",
+   "name": "ch2Door"
+  },
+  {
+   "path": "edit/ch3Door.vox.zst",
+   "sha256": "1f64320b2ec99c56d2318bb851e841672b30e31ed1e43ee29cfb2db9a0fd591e",
+   "size": 98,
+   "kind": "edit",
+   "name": "ch3Door"
+  },
+  {
+   "path": "edit/ch3Door.mesh.zst",
+   "sha256": "7df008309748bacc08bea3526460e97a87b1cc8e2c2824cf6881b78b15d5ea21",
+   "size": 8258,
+   "kind": "edit",
+   "name": "ch3Door"
+  },
+  {
+   "path": "edit/ch4Door.vox.zst",
+   "sha256": "c4689c8d2c8773151a0b07128415d741f206267f4ae73ecd859fc4229270cb3c",
+   "size": 98,
+   "kind": "edit",
+   "name": "ch4Door"
+  },
+  {
+   "path": "edit/ch4Door.mesh.zst",
+   "sha256": "52a95aa8749db28ab5919f07f6a9dad20fb2bc8c36eadaabb9fd0d16665cfd98",
+   "size": 6794,
+   "kind": "edit",
+   "name": "ch4Door"
+  },
+  {
+   "path": "edit/startCave.vox.zst",
+   "sha256": "99849b73428aa1c9fa4a8de16fae841f75b17979d60105c2b62682b267b5dfe5",
+   "size": 932,
+   "kind": "edit",
+   "name": "startCave"
+  },
+  {
+   "path": "edit/startCave.mesh.zst",
+   "sha256": "912b00bb9217dd69be4843d9f335865294cae762a1c6b5e2a06573d2a44bfd3e",
+   "size": 10906,
+   "kind": "edit",
+   "name": "startCave"
+  },
+  {
+   "path": "edit/bridge1.vox.zst",
+   "sha256": "e41a4ed0014e7215fed05f542f3afbc675ec93e2c89d268a5de40cc0ae956a87",
+   "size": 102,
+   "kind": "edit",
+   "name": "bridge1"
+  },
+  {
+   "path": "edit/bridge1.mesh.zst",
+   "sha256": "3fb3e6d0d03327891cd86ffc9679f864dc247415016a206ebeff988eabd22a00",
+   "size": 15716,
+   "kind": "edit",
+   "name": "bridge1"
+  },
+  {
+   "path": "edit/door.vox.zst",
+   "sha256": "357867b5fb6ffa924240b6dad73ae2e76b57b63a3e896341a674aef66f8bfe63",
+   "size": 100,
+   "kind": "edit",
+   "name": "door"
+  },
+  {
+   "path": "edit/door.mesh.zst",
+   "sha256": "8f5ba9a0a0fa28c2d794776095a3a384e4c1b9e4bb4731420ffb18a72900d517",
+   "size": 5886,
+   "kind": "edit",
+   "name": "door"
+  },
+  {
+   "path": "edit/hearth.vox.zst",
+   "sha256": "6cbbcceb87609dc29d20d00f0dd0b585daa816762c7fd9402945873b2eba6cdc",
+   "size": 500,
+   "kind": "edit",
+   "name": "hearth"
+  },
+  {
+   "path": "edit/hearth.mesh.zst",
+   "sha256": "bc615f1353862deef28dd7ab55bbb610d9105e285bf14ccc34a5da81dc072525",
+   "size": 17603,
+   "kind": "edit",
+   "name": "hearth"
+  },
+  {
+   "path": "edit/grate.vox.zst",
+   "sha256": "57d22fe06aa74cb66194e9b21a14cfd2ec888c59045e78922c0e889e21263e7d",
+   "size": 465,
+   "kind": "edit",
+   "name": "grate"
+  },
+  {
+   "path": "edit/grate.mesh.zst",
+   "sha256": "ded5a0df412905c78c0a010979b7803a5175af4065dc65305717d8ccaf2b5a5f",
+   "size": 10726,
+   "kind": "edit",
+   "name": "grate"
+  },
+  {
+   "path": "edit/tunnelWall.vox.zst",
+   "sha256": "a77fddeafb170f821a20dc9ef84fef16bae231525e17f64873862b094cc7aec6",
+   "size": 216,
+   "kind": "edit",
+   "name": "tunnelWall"
+  },
+  {
+   "path": "edit/tunnelWall.mesh.zst",
+   "sha256": "bfbe15d427e7cc12222399cd0412244de5ffff9d2e3aead58cd8dd953e5631a7",
+   "size": 29268,
+   "kind": "edit",
+   "name": "tunnelWall"
   },
   {
    "path": "script/engine/math.js",
