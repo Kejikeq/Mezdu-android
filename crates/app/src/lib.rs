@@ -336,16 +336,31 @@ impl App {
     }
 }
 
+/// commit of this build (set by CI for the APK; empty in local builds: no APK update check)
+pub const BUILD: &str = match option_env!("MEZDU_BUILD") {
+    Some(b) => b,
+    None => "",
+};
+
 pub fn run(event_loop: EventLoop<()>, data_dir: PathBuf) {
     event_loop.set_control_flow(ControlFlow::Wait);
+    // the pack in the data dir is checked against the release in the background; with MEZDU_PACK (a pack picked
+    // by hand on the desktop) nothing is downloaded
+    if std::env::var_os("MEZDU_PACK").is_none() {
+        mezdu_updater::install_staged(&data_dir);
+        let dir = data_dir.clone();
+        let _ = std::thread::Builder::new().name("updater".into()).spawn(move || {
+            mezdu_updater::run(dir, BUILD);
+        });
+    }
     let mut app = App::new(data_dir);
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("event loop: {e}");
     }
 }
 
-/// Copies the pack bundled in the APK (assets/pack) into the data dir when the data dir holds another commit.
-/// Stage 2 (updater) must not let this overwrite a newer downloaded pack.
+/// Copies the pack bundled in the APK (assets/pack) into the data dir once per bundled commit (after an install or
+/// an update of the APK); a pack downloaded by the updater afterwards is never overwritten by the older bundled one.
 #[cfg(target_os = "android")]
 fn install_bundled_pack(app: &winit::platform::android::activity::AndroidApp, data_dir: &std::path::Path) {
     use std::io::Read;
@@ -360,7 +375,9 @@ fn install_bundled_pack(app: &winit::platform::android::activity::AndroidApp, da
     let Some(json) = read("manifest.json") else { return };
     let Ok(m) = mezdu_core::Manifest::parse(&json) else { return };
     let dst = data_dir.join("pack");
-    if Pack::open(&dst).map(|p| p.manifest.commit == m.commit).unwrap_or(false) {
+    let mark = data_dir.join("bundled.txt");
+    let installed_once = std::fs::read_to_string(&mark).map(|c| c.trim() == m.commit).unwrap_or(false);
+    if installed_once && Pack::open(&dst).is_ok() {
         return;
     }
     let tmp = data_dir.join("pack.tmp");
@@ -379,7 +396,10 @@ fn install_bundled_pack(app: &winit::platform::android::activity::AndroidApp, da
     if write("manifest.json", &json).is_ok() {
         let _ = std::fs::remove_dir_all(&dst);
         match std::fs::rename(&tmp, &dst) {
-            Ok(()) => log::info!("bundled pack {} installed", m.version),
+            Ok(()) => {
+                let _ = std::fs::write(&mark, &m.commit);
+                log::info!("bundled pack {} installed", m.version);
+            }
             Err(e) => log::error!("bundled pack: {e}"),
         }
     }
@@ -391,6 +411,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("mezdu"));
     let data_dir = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp/mezdu"));
+    mezdu_updater::install_staged(&data_dir);
     install_bundled_pack(&app, &data_dir);
     let el = EventLoop::builder().with_android_app(app).build().expect("event loop");
     run(el, data_dir);

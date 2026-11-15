@@ -107,6 +107,8 @@ pub struct World {
     comp_res: CompRes,
     targets: Option<Targets>,
     draws: Vec<Draw>,
+    /// per draw: in view this frame (renderer.js visibleChunks: distance and frustum)
+    draw_vis: Vec<bool>,
     pub quads: u32,
     pub calls: u32,
     pub shadow_passes: u32,
@@ -540,6 +542,7 @@ impl World {
             p_prop_shadow,
             comp_res,
             targets: None,
+            draw_vis: vec![false; draws.len()],
             draws,
             quads,
             calls: 0,
@@ -717,8 +720,18 @@ impl World {
             q.write_buffer(&self.frame_buf_c1, 0, bytes(&self.frame_c1));
         }
 
+        // macro-chunks within S.far (180 m) and the frustum (boxes of 8 x 16 x 8 m plus margin), as visibleChunks
+        let planes = frustum_planes(&vp_nj);
+        let (hxz, hy) = (4.0 + 0.8, 8.0 + 0.8);
+        for (v, dr) in self.draw_vis.iter_mut().zip(&self.draws) {
+            let dx = ((dr.cx - cam.pos.x).abs() - hxz).max(0.0);
+            let dz = ((dr.cz - cam.pos.z).abs() - hxz).max(0.0);
+            let dist = dx.hypot(dz);
+            let inside = planes.iter().all(|pl| pl[0] * dr.cx + pl[1] * 8.0 + pl[2] * dr.cz + pl[3] + pl[0].abs() * hxz + pl[1].abs() * hy + pl[2].abs() * hxz >= 0.0);
+            *v = dist <= 180.0 && (dist <= 10.0 || inside);
+        }
         if let Some(pr) = &mut self.props {
-            pr.cull(q, cam.pos.to_array(), &frustum_planes(&vp_nj));
+            pr.cull(q, cam.pos.to_array(), &planes);
             for (k, &again) in redo.iter().enumerate() {
                 if again {
                     let cs = &self.casc[k];
@@ -808,7 +821,7 @@ impl World {
             }
             p.set_bind_group(1, &self.bg1, &[]);
             p.set_pipeline(&self.p_terrain);
-            for dr in &self.draws {
+            for (dr, _) in self.draws.iter().zip(&self.draw_vis).filter(|(_, v)| **v) {
                 if dr.opaque > 0 {
                     p.draw_indexed(0..dr.opaque * 6, (dr.base * 4) as i32, 0..1);
                     self.calls += 1;
@@ -821,7 +834,7 @@ impl World {
                 self.calls += 1;
             }
             p.set_pipeline(&self.p_leaf);
-            for dr in &self.draws {
+            for (dr, _) in self.draws.iter().zip(&self.draw_vis).filter(|(_, v)| **v) {
                 if dr.leaves > 0 {
                     p.draw_indexed(0..dr.leaves * 6, (dr.leaf_base * 4) as i32, 0..1);
                     self.calls += 1;

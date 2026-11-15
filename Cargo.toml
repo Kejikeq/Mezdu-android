@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/gfx", "crates/game", "crates/app"]
+members = ["crates/core", "crates/gfx", "crates/game", "crates/updater", "crates/app"]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +10,7 @@ edition = "2021"
 mezdu-core = { path = "crates/core" }
 mezdu-gfx = { path = "crates/gfx" }
 mezdu-game = { path = "crates/game" }
+mezdu-updater = { path = "crates/updater" }
 wgpu = "30"
 naga = { version = "30", features = ["wgsl-in"] }
 winit = { version = "0.30", features = ["android-native-activity"] }

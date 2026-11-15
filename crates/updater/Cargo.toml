@@ -1,0 +1,11 @@
+[package]
+name = "mezdu-updater"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mezdu-core.workspace = true
+serde_json.workspace = true
+log.workspace = true
+# HTTPS with rustls and bundled root certificates: the same on Android and desktop, no system TLS
+ureq = "3"

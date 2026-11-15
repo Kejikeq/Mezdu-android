@@ -24,17 +24,20 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: clippy (desktop + android)
-        run: |
-          sudo apt-get install -y -q libxkbcommon-dev >/dev/null
-          cargo clippy --release -- -D warnings
-          cargo clippy --release --target aarch64-linux-android -p mezdu-app -- -D warnings
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-ndk
+      - name: clippy (desktop + android)
+        # android through cargo-ndk: ring (TLS of the updater) compiles C with the NDK's clang
+        run: |
+          sudo apt-get install -y -q libxkbcommon-dev >/dev/null
+          cargo clippy --release -- -D warnings
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -P 26 clippy --release -p mezdu-app -- -D warnings
       - name: native libs
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export MEZDU_BUILD="${GITHUB_SHA::7}" # the APK compares it with apk-version.txt of the release
           cargo ndk -t arm64-v8a -t x86_64 -P 26 -o app/src/main/jniLibs build --release -p mezdu-app --lib
           ls -la app/src/main/jniLibs/*
       - name: commit native libs to main
