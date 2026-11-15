@@ -45,6 +45,39 @@ fn get(url: &str, limit: u64) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Downloads `url` into `part`, continuing what an earlier, interrupted attempt left there (HTTP Range); returns the
+/// whole file once it has `size` bytes (the caller checks its hash). `progress` gets the bytes of this file so far.
+fn get_resumable(url: &str, part: &Path, size: u64, progress: &dyn Fn(u64)) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+    let have = if have > size { 0 } else { have };
+    if have < size {
+        let mut req = agent().get(url);
+        if have > 0 {
+            req = req.header("Range", format!("bytes={have}-"));
+        }
+        let mut resp = req.call().map_err(|e| format!("{url}: {e}"))?;
+        // 206: the rest of the file; 200: the server sends it whole, start over
+        let mut at = if resp.status().as_u16() == 206 { have } else { 0 };
+        let mut file = std::fs::OpenOptions::new().create(true).write(true).append(at > 0).truncate(at == 0).open(part).map_err(|e| e.to_string())?;
+        let mut r = resp.body_mut().as_reader().take(size - at + 1);
+        let mut buf = vec![0u8; 64 << 10];
+        loop {
+            let n = r.read(&mut buf).map_err(|e| format!("{url}: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            // every chunk reaches the disk: what is written survives a lost connection or a closed app
+            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            at += n as u64;
+            progress(at);
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    progress(size);
+    std::fs::read(part).map_err(|e| e.to_string())
+}
+
 /// At start-up, before the pack is opened: replaces `pack` with a staged `pack.next` (rename, then delete).
 pub fn install_staged(data_dir: &Path) {
     let (cur, next, old) = (data_dir.join("pack"), data_dir.join("pack.next"), data_dir.join("pack.old"));
@@ -138,9 +171,10 @@ fn check_pack_with(data_dir: &Path, progress: &dyn Fn(u64, u64)) -> Result<Outco
             return Ok(Outcome::UpToDate);
         }
     }
-    // assembled in pack.tmp and renamed to pack.next only when complete: install_staged never sees half a pack
+    // assembled in pack.tmp and renamed to pack.next only when complete: install_staged never sees half a pack.
+    // pack.tmp outlives an interrupted check: files already there with the right hash are not downloaded again,
+    // a half-downloaded one (<file>.part) continues where it stopped
     let next = data_dir.join("pack.tmp");
-    let _ = std::fs::remove_dir_all(&next);
     let dest = |rel: &str| -> Result<PathBuf, String> {
         let p = next.join(rel);
         std::fs::create_dir_all(p.parent().unwrap_or(&next)).map_err(|e| e.to_string())?;
@@ -155,17 +189,24 @@ fn check_pack_with(data_dir: &Path, progress: &dyn Fn(u64, u64)) -> Result<Outco
         if same(local, f) {
             // unchanged: a hard link to the installed file (a copy where links are not possible)
             let src = data_dir.join("pack").join(&f.path);
+            let _ = std::fs::remove_file(&p);
             if std::fs::hard_link(&src, &p).is_err() {
                 std::fs::copy(&src, &p).map_err(|e| format!("{}: {e}", f.path))?;
             }
             continue;
         }
-        let d = get(&format!("{PACK_URL}{}", asset_name(&f.path)), f.size + 1)?;
-        if sha256_hex(&d) != f.sha256 {
-            return Err(format!("{}: hash mismatch", f.path));
+        // downloaded by an earlier, interrupted check
+        let ready = std::fs::metadata(&p).is_ok_and(|m| m.len() == f.size) && std::fs::read(&p).is_ok_and(|d| sha256_hex(&d) == f.sha256);
+        if !ready {
+            let part = p.with_file_name(format!("{}.part", p.file_name().and_then(|n| n.to_str()).unwrap_or("file")));
+            let d = get_resumable(&format!("{PACK_URL}{}", asset_name(&f.path)), &part, f.size, &|n| progress(done + n, total))?;
+            if sha256_hex(&d) != f.sha256 {
+                let _ = std::fs::remove_file(&part);
+                return Err(format!("{}: hash mismatch", f.path));
+            }
+            std::fs::rename(&part, &p).map_err(|e| format!("{}: {e}", f.path))?;
+            downloaded += 1;
         }
-        std::fs::write(&p, &d).map_err(|e| format!("{}: {e}", f.path))?;
-        downloaded += 1;
         done += f.size;
         progress(done, total);
     }
@@ -294,14 +335,24 @@ pub fn check_code(data_dir: &Path, abi: &str, running: &str, progress: &dyn Fn(u
     if std::fs::read_to_string(code.join("build.txt")).map(|b| b.trim() == build).unwrap_or(false) && code.join("libmezdu.so").exists() {
         return Ok(CodeOutcome::Staged { build, bytes: 0 });
     }
-    progress(0, size);
-    let packed = get(&format!("{APP_URL}libmezdu-{abi}.so.zst"), 64 << 20)?;
-    progress(packed.len() as u64, packed.len() as u64);
+    std::fs::create_dir_all(&code).map_err(|e| e.to_string())?;
+    // the compressed size is in the json since LAUNCHER 1 builds of CI ("zsize"); without it the whole file is fetched
+    let zsize = j["zsize"].as_u64().unwrap_or(64 << 20);
+    let part = code.join(format!("libmezdu-{build}.so.zst.part"));
+    // halves of older builds are of no use
+    for e in std::fs::read_dir(&code).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.ends_with(".part") && e.path() != part {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    progress(0, zsize);
+    let packed = get_resumable(&format!("{APP_URL}libmezdu-{abi}.so.zst"), &part, zsize, &|n| progress(n, zsize))?;
+    let _ = std::fs::remove_file(&part);
     let lib = unzstd(&packed)?;
     if sha256_hex(&lib) != sha || lib.len() as u64 != size {
         return Err("game library: hash mismatch".into());
     }
-    std::fs::create_dir_all(&code).map_err(|e| e.to_string())?;
     // the launcher takes the library only with build.txt: away while the library is replaced
     let _ = std::fs::remove_file(code.join("build.txt"));
     let tmp = code.join("libmezdu.so.tmp");

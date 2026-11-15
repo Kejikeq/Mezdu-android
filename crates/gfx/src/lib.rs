@@ -5,7 +5,10 @@ pub mod world;
 pub use wgpu;
 
 pub struct Gfx {
-    pub surface: wgpu::Surface<'static>,
+    /// none while the app is in the background (Android takes the native window away); device, world and
+    /// everything on the GPU stay, so coming back needs only a new surface
+    pub surface: Option<wgpu::Surface<'static>>,
+    instance: wgpu::Instance,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
@@ -90,7 +93,7 @@ impl Gfx {
         };
         surface.configure(&device, &config);
         log::info!("gfx: {:?} · {} · {:?}", info.backend, info.name, format);
-        Ok(Gfx { surface, device, queue, config, backend: info.backend, adapter_name: info.name.clone(), adapter_info: info })
+        Ok(Gfx { surface: Some(surface), instance, device, queue, config, backend: info.backend, adapter_name: info.name.clone(), adapter_info: info })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -99,7 +102,27 @@ impl Gfx {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(s) = &self.surface {
+            s.configure(&self.device, &self.config);
+        }
+    }
+
+    /// The app went to the background: only the surface goes, the device and the world stay in memory.
+    pub fn suspend(&mut self) {
+        self.surface = None;
+    }
+
+    /// Back from the background: a surface on the new native window of the same device.
+    pub fn resume<W>(&mut self, window: Arc<W>, width: u32, height: u32) -> Result<(), String>
+    where
+        W: wgpu::rwh::HasWindowHandle + wgpu::rwh::HasDisplayHandle + std::fmt::Debug + Send + Sync + 'static,
+    {
+        let s = self.instance.create_surface(window).map_err(|e| e.to_string())?;
+        self.config.width = width.max(1);
+        self.config.height = height.max(1);
+        s.configure(&self.device, &self.config);
+        self.surface = Some(s);
+        Ok(())
     }
 
     /// Compiles every pack shader on this device; returns (name, error) for the ones the driver rejects.
@@ -119,14 +142,15 @@ impl Gfx {
     }
 
     fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
-        match self.surface.get_current_texture() {
+        let surface = self.surface.as_ref()?;
+        match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => Some(t),
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 Some(t)
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 None
             }
             _ => None, // timeout / occluded: skip the frame

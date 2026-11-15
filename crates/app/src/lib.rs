@@ -17,6 +17,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+mod save;
 mod url;
 
 const FRAME: std::time::Duration = std::time::Duration::from_nanos(1_000_000_000 / 30);
@@ -143,6 +144,65 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
     Ok(Loaded { pack, vox, world })
 }
 
+/// the nightmare half of the logo and the hot end of the progress bar
+const EMBER: egui::Color32 = egui::Color32::from_rgb(0xc4, 0x4a, 0x3c);
+
+/// The logo: МЕЖДУ cut in half down the middle, the left half in the colour of the dream, the right one in the
+/// colour of the nightmare, and behind it a ring around the cut that joins the two.
+fn logo(ui: &mut egui::Ui, size: f32) {
+    let font = egui::FontId::proportional(size);
+    let (dream, night) = (ui.painter().layout_no_wrap("МЕЖДУ".into(), font.clone(), INK), ui.painter().layout_no_wrap("МЕЖДУ".into(), font, EMBER));
+    let gs = dream.size();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(gs.x + size * 0.4, gs.y * 1.5), egui::Sense::hover());
+    let c = rect.center();
+    let p = ui.painter();
+    // the ring: dream on the left, nightmare on the right, mixing at the top and the bottom
+    let r = gs.y * 0.78;
+    let n = 96;
+    let mix = |a: egui::Color32, b: egui::Color32, t: f32| {
+        let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
+        egui::Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+    };
+    for i in 0..n {
+        let (a0, a1) = (i as f32 / n as f32 * std::f32::consts::TAU, (i + 1) as f32 / n as f32 * std::f32::consts::TAU);
+        let t = (0.5 + 0.5 * ((a0 + a1) * 0.5).cos()).clamp(0.0, 1.0);
+        let col = mix(INK, EMBER, t).gamma_multiply(0.8);
+        p.line_segment([c + egui::vec2(a0.cos(), a0.sin()) * r, c + egui::vec2(a1.cos(), a1.sin()) * r], egui::Stroke::new((size * 0.06).max(2.0), col));
+    }
+    // the word over the ring: one layout drawn twice, each clipped to its half
+    let pos = c - gs * 0.5;
+    let clip = |x0: f32, x1: f32| egui::Rect::from_x_y_ranges(x0..=x1, rect.y_range());
+    p.with_clip_rect(clip(rect.left(), c.x)).galley(pos, dream, INK);
+    p.with_clip_rect(clip(c.x, rect.right())).galley(pos, night, EMBER);
+}
+
+/// One loading bar for all the stages: a dark track, the done part as a gradient from the nightmare's ember to the
+/// accent with a soft glow; while a stage has no measure yet a light runs along the done part.
+fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
+    let h = 6.0;
+    let (r, _) = ui.allocate_exact_size(egui::vec2(w, h + 8.0), egui::Sense::hover());
+    let p = ui.painter();
+    let track = egui::Rect::from_center_size(r.center(), egui::vec2(w, h));
+    p.rect_filled(track, h * 0.5, egui::Color32::from_rgba_unmultiplied(255, 245, 230, 0x14));
+    let x1 = track.left() + w * frac.max(0.02);
+    let fill = egui::Rect::from_x_y_ranges(track.left()..=x1, track.y_range());
+    p.rect_filled(fill.expand(3.0), h, ACCENT.gamma_multiply(0.10));
+    let mut m = egui::Mesh::default();
+    for (x, c) in [(fill.left(), EMBER), (fill.right(), ACCENT)] {
+        m.colored_vertex(egui::pos2(x, fill.top()), c);
+        m.colored_vertex(egui::pos2(x, fill.bottom()), c);
+    }
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(1, 3, 2);
+    p.with_clip_rect(fill).add(egui::Shape::mesh(m));
+    p.circle_filled(egui::pos2(x1, track.center().y), h * 0.5, ACCENT);
+    if busy {
+        let x = fill.left() + fill.width() * (t * 0.7).fract();
+        let glint = egui::Rect::from_x_y_ranges((x - 18.0).max(fill.left())..=(x + 18.0).min(fill.right()), track.y_range());
+        p.rect_filled(glint, h * 0.5, egui::Color32::from_rgba_unmultiplied(255, 250, 240, 0x40));
+    }
+}
+
 type LoadResult = std::sync::mpsc::Receiver<Result<Loaded, String>>;
 /// stage, share done, notes: what the loading screen shows
 type LoadView = (usize, f32, [String; 4]);
@@ -159,6 +219,8 @@ enum Screen {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Action {
     NewGame,
+    /// the autosave from the menu
+    Continue,
     Resume,
     Settings,
     Back,
@@ -198,6 +260,10 @@ pub struct App {
     next_frame: Instant,
     /// MEZDU_TIME=<seconds> freezes the animation clock (comparable screenshots on the desktop)
     frozen: Option<f32>,
+    /// seconds of play since the last autosave
+    save_t: f32,
+    /// an autosave exists: «Продолжить» in the menu
+    saved: bool,
     /// commit of a newer APK in the release, set by the updater thread
     apk: Arc<Mutex<Option<String>>>,
     frames: u32,
@@ -228,6 +294,7 @@ impl App {
                 None
             }
         });
+        let saved = save::load(&data_dir).is_some();
         App {
             data_dir,
             pack,
@@ -252,6 +319,8 @@ impl App {
             start: Instant::now(),
             next_frame: Instant::now(),
             frozen: std::env::var("MEZDU_TIME").ok().and_then(|v| v.parse().ok()),
+            save_t: 0.0,
+            saved,
             apk,
             frames: 0,
             fps_t: Instant::now(),
@@ -306,6 +375,10 @@ impl App {
                 self.world = Some(l.world);
                 if self.screen == Screen::Loading {
                     self.screen = Screen::Menu;
+                    // the system closed the app during a game: it opens there again, paused
+                    if save::load(&self.data_dir).is_some_and(|s| s.playing) && self.restore() {
+                        self.screen = Screen::Paused;
+                    }
                     // this library started and built the world: the launcher keeps it (crates/launcher)
                     let _ = std::fs::remove_file(self.data_dir.join("code").join("booting"));
                 }
@@ -333,10 +406,21 @@ impl App {
                     self.screen = Screen::Playing;
                 }
             }
+            Action::Continue => {
+                if self.restore() {
+                    self.screen = Screen::Playing;
+                }
+            }
             Action::Resume => self.screen = Screen::Playing,
-            Action::Pause => self.screen = Screen::Paused,
+            Action::Pause => {
+                self.screen = Screen::Paused;
+                self.autosave();
+            }
             Action::Settings => self.screen = Screen::Settings,
             Action::Back | Action::ToMenu => {
+                if matches!(self.screen, Screen::Playing | Screen::Paused) {
+                    self.autosave_as(false);
+                }
                 self.screen = Screen::Menu;
                 self.cam = Camera { pos: glam::Vec3::new(MENU_CAM[0], MENU_CAM[1], MENU_CAM[2]), yaw: MENU_CAM[3], pitch: MENU_CAM[4], fov_y: 1.0 };
             }
@@ -356,6 +440,31 @@ impl App {
         self.joystick_reset();
     }
 
+    /// the hero where the autosave left him; false without a save or a hero
+    fn restore(&mut self) -> bool {
+        let (Some(s), Some(h)) = (save::load(&self.data_dir), &mut self.hero) else { return false };
+        h.player.place(s.pos[0], s.pos[1], s.pos[2], s.yaw);
+        h.player.cam_yaw = s.cam_yaw;
+        h.player.cam_pitch = s.cam_pitch;
+        log::info!("autosave: hero at {:.2?}", s.pos);
+        true
+    }
+
+    fn autosave(&mut self) {
+        if matches!(self.screen, Screen::Playing | Screen::Paused) {
+            self.autosave_as(true);
+        }
+    }
+
+    fn autosave_as(&mut self, playing: bool) {
+        self.save_t = 0.0;
+        if let Some(h) = &self.hero {
+            let p = &h.player;
+            save::store(&self.data_dir, &save::Save { pos: p.pos, yaw: p.yaw, cam_yaw: p.cam_yaw, cam_pitch: p.cam_pitch, playing });
+            self.saved = true;
+        }
+    }
+
     fn joystick_reset(&mut self) {
         if let Some(h) = &mut self.hero {
             h.joy = None;
@@ -367,7 +476,7 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
+    fn layout(ctx: &egui::Context, screen: Screen, saved: bool, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let big = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
             let b = egui::Button::new(egui::RichText::new(text).size(19.0).strong()).min_size(egui::vec2(260.0, 50.0));
             if ui.add_enabled(enabled, b).clicked() {
@@ -381,39 +490,22 @@ impl App {
             Screen::Loading => {
                 shade(ctx, 255);
                 egui::Area::new(egui::Id::unique("loading")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).order(egui::Order::Background).show(ctx, |ui| {
-                    ui.set_width(340.0);
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("МЕЖДУ").size(54.0).color(INK).strong());
-                        ui.add_space(14.0);
+                    let w = 360.0;
+                    ui.set_width(w);
+                    ui.vertical_centered(|ui| {
+                        logo(ui, 60.0);
+                        ui.add_space(30.0);
                         let (stage, frac, notes) = load.1.map_or((STAGES.len(), 1.0, Default::default()), |(a, b, c)| (*a, *b, c.clone()));
-                        for (i, name) in STAGES.iter().enumerate() {
-                            let (col, mark) = if i < stage { (INK.gamma_multiply(0.75), "готово") } else if i == stage { (ACCENT, "") } else { (INK.gamma_multiply(0.35), "") };
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(*name).size(16.0).color(col));
-                                if !mark.is_empty() {
-                                    ui.label(egui::RichText::new(mark).size(13.0).color(INK.gamma_multiply(0.45)));
-                                }
-                            });
-                            if i == stage && err.is_none() {
-                                let (r, p) = ui.allocate_painter(egui::vec2(300.0, 4.0), egui::Sense::hover());
-                                p.rect_filled(r.rect, 2.0, egui::Color32::from_rgba_unmultiplied(255, 245, 230, 0x18));
-                                if frac > 0.001 {
-                                    p.rect_filled(egui::Rect::from_min_size(r.rect.min, egui::vec2(r.rect.width() * frac.clamp(0.0, 1.0), 4.0)), 2.0, ACCENT);
-                                } else {
-                                    let x = (load.0 * 0.8).fract();
-                                    let a = r.rect.left() + r.rect.width() * (x - 0.25).max(0.0);
-                                    let b = r.rect.left() + r.rect.width() * (x + 0.1).min(1.0);
-                                    p.rect_filled(egui::Rect::from_x_y_ranges(a..=b, r.rect.y_range()), 2.0, ACCENT);
-                                }
-                            }
-                            if !notes[i].is_empty() {
-                                ui.label(egui::RichText::new(&notes[i]).size(12.0).color(INK.gamma_multiply(0.5)));
-                            }
-                            ui.add_space(4.0);
-                        }
+                        // one line over one bar: the stage, and what it is doing now
+                        let i = stage.min(STAGES.len() - 1);
+                        let status = if notes[i].is_empty() { STAGES[i].to_string() } else { format!("{} · {}", STAGES[i], notes[i]) };
+                        ui.label(egui::RichText::new(status).size(14.0).color(INK.gamma_multiply(0.8)));
+                        ui.add_space(8.0);
+                        let all = ((stage as f32 + frac.clamp(0.0, 1.0)) / STAGES.len() as f32).clamp(0.0, 1.0);
+                        progress_bar(ui, w, all, load.0, err.is_none() && frac < 0.001);
                         if let Some(e) = err {
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new(e).color(egui::Color32::from_rgb(0xe0, 0x50, 0x3f)));
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new(e).size(14.0).color(egui::Color32::from_rgb(0xe0, 0x50, 0x3f)));
                         }
                     });
                 });
@@ -436,11 +528,13 @@ impl App {
                 ctx.layer_painter(egui::LayerId::background()).add(egui::Shape::mesh(m));
                 egui::Area::new(egui::Id::unique("menu")).anchor(egui::Align2::LEFT_CENTER, egui::vec2(48.0, 0.0)).show(ctx, |ui| {
                     ui.label(egui::RichText::new("воксельный психологический триллер").size(14.0).color(ACCENT));
-                    ui.label(egui::RichText::new("МЕЖДУ").size(58.0).color(INK).strong());
+                    logo(ui, 58.0);
                     ui.label(egui::RichText::new("Мир помнит то, что ты забыл.").size(16.0).italics().color(INK.gamma_multiply(0.75)));
                     ui.add_space(22.0);
+                    if saved {
+                        big(ui, "Продолжить", true, Action::Continue, out);
+                    }
                     big(ui, "Начать игру", true, Action::NewGame, out);
-                    big(ui, "Загрузить", false, Action::Resume, out);
                     big(ui, "Настройки", true, Action::Settings, out);
                     #[cfg(not(target_os = "android"))]
                     big(ui, "Выход", true, Action::Quit, out);
@@ -520,6 +614,23 @@ impl ApplicationHandler for App {
             }
         };
         let size = window.inner_size();
+        // back from the background: the device, the world and the interface are still here, only the surface is new
+        if let Some(g) = &mut self.gfx {
+            match g.resume(window.clone(), size.width, size.height) {
+                Ok(()) => {
+                    log::info!("resumed: {:?}", self.screen);
+                    self.last = Instant::now();
+                    window.request_redraw();
+                    return;
+                }
+                Err(e) => {
+                    log::warn!("resume: {e}; the device is created again");
+                    self.world = None;
+                    self.ui = None;
+                    self.gfx = None;
+                }
+            }
+        }
         match Gfx::new(window.clone(), size.width, size.height) {
             Ok(g) => {
                 self.ui = Some(Ui::new(&g.device, g.config.format, window.scale_factor() as f32));
@@ -540,7 +651,7 @@ impl ApplicationHandler for App {
 
     /// QUALITY.fps = 30: one frame every 33 ms, the event loop sleeps in between (battery); vsync alone would draw 60
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        if self.gfx.is_none() {
+        if self.gfx.as_ref().is_none_or(|g| g.surface.is_none()) {
             el.set_control_flow(ControlFlow::Wait);
             return;
         }
@@ -554,11 +665,13 @@ impl ApplicationHandler for App {
         el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 
-    // Android destroys the native window in the background: drop the surface, stop rendering (battery)
+    // Android destroys the native window in the background: only the surface goes (rendering stops: battery); the
+    // world stays in memory and the game continues where it was. If the system closes the app, the autosave does.
     fn suspended(&mut self, _el: &ActiveEventLoop) {
-        self.world = None;
-        self.ui = None;
-        self.gfx = None;
+        if let Some(g) = &mut self.gfx {
+            g.suspend();
+        }
+        self.autosave();
         if self.screen == Screen::Playing {
             self.screen = Screen::Paused;
         }
@@ -650,6 +763,7 @@ impl App {
                     joy_vis = Some((egui::pos2(s0.0 as f32 / ppp, s0.1 as f32 / ppp), egui::pos2(s1.0 as f32 / ppp, s1.1 as f32 / ppp)));
                 }
                 if playing {
+                    self.save_t += dt;
                     let inp = Input { mv, look: h.look, run: self.keys[6] };
                     h.look = [0.0; 2];
                     h.player.update(dt, &inp, &h.vox);
@@ -669,20 +783,23 @@ impl App {
                 w.set_dynamic(&g.queue, &h.words);
             }
         }
+        if playing && self.save_t >= save::AUTOSAVE {
+            self.autosave();
+        }
         if matches!(self.screen, Screen::Menu | Screen::Settings) {
             // the menu's view drifts a little, as a camera on a tripod in the wind
             self.cam.yaw = MENU_CAM[3] + (time * 0.07).sin() * 0.06;
         }
         let info = self.sys_info();
         let apk = self.apk.lock().ok().and_then(|a| a.clone());
-        let (screen, err) = (self.screen, self.load_error.clone());
+        let (screen, err, saved) = (self.screen, self.load_error.clone(), self.saved);
         let lt = self.loading_frames as f32 / 30.0;
         let ls = self.loading.as_ref().and_then(|(s, _)| s.lock().ok().map(|s| (s.stage, s.frac, s.notes.clone())));
         let mut actions = Vec::new();
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, saved, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
         for a in actions {
             self.act(a, el);
