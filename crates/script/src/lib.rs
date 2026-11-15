@@ -87,7 +87,8 @@ const BOOT: &str = "import { setupStory } from 'game/story.js';\n\
 import { ITEMS } from 'game/items.js';\n\
 import { scoreInteractable } from 'game/interaction_los.js';\n\
 import { Duality } from 'game/duality.js';\n\
-await globalThis.__boot({ setupStory, ITEMS, scoreInteractable, Duality });\n";
+import * as WR from 'game/world_rules.js';\n\
+await globalThis.__boot({ setupStory, ITEMS, scoreInteractable, Duality, WR });\n";
 
 /// module names are paths under script/ ("game/story.js"); imports are relative to the importing module
 struct PackResolver;

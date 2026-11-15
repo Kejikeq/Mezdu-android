@@ -138,22 +138,15 @@ const G = quiet({
   objective(t) { ui.setObjective(t); },
   fade(to, dur = 1) { this.fadeV = to; return this.wait(Math.min(dur, 2)); },
   vibrate() {},
-  worldAtPlayer() { return worldAtPlayer(); },
-  // main.js toNight / toDream: the world turns around the hero's head
-  toNight(dur, opts = {}) {
-    const p = this.player.pos;
-    this.duality.flip(1, [p[0], p[1] + 1, p[2]], opts);
-    this.duality.nightTimer = this.duality.baseNight ? 0 : dur;
-  },
-  toDream(opts = {}) {
-    const p = this.player.pos;
-    this.duality.flip(0, [p[0], p[1] + 1, p[2]], opts);
-    this.duality.nightTimer = 0;
-  },
-  stopPeer() {
-    this.peering = false;
-    if (this.duality.target === 1 && !this.duality.baseNight) this.toDream({ speed: 40 });
-  },
+  // the rules of the two worlds: the web's game/world_rules.js from the pack (WR, set in boot)
+  worldAtPlayer() { return WR.worldAtPlayer(this); },
+  toNight(dur, opts = {}) { WR.toNight(this, dur, opts); },
+  toDream(opts = {}) { WR.toDream(this, opts); },
+  peer() { WR.peer(this); },
+  stopPeer() { WR.stopPeer(this); },
+  // main.js respawn: the collapse back to the road is the native side's (event 'collapse'); once until the mind recovers
+  respawn(why) { if (!this.respawning) { this.respawning = true; emit({ t: why === 'collapse' ? 'collapse' : 'respawn' }); } },
+  respawning: false,
   stab(d) { this.duality.stability = Math.max(0, Math.min(100, this.duality.stability + d)); },
   lock(v) { this.cineLock = !!v; },
   async pickup(id, opts = {}) {
@@ -214,6 +207,7 @@ globalThis.__boot = async (mods) => {
   ITEMS = mods.ITEMS;
   scoreInteractable = mods.scoreInteractable;
   G.duality = new mods.Duality();
+  WR = mods.WR;
   mods.setupStory(G);
   log(`story: ${G.interactables.length} interactables, ${G.triggers.length} triggers, ${Object.keys(ITEMS).length} items`);
 };
@@ -232,29 +226,8 @@ globalThis.__cam = (cx, cy, cz, fx, fy, fz) => {
   const c = G.player.camPos;
   c[0] = cx; c[1] = cy; c[2] = cz; camFwd[0] = fx; camFwd[1] = fy; camFwd[2] = fz;
 };
-// the world at the hero's head (main.js worldAtPlayer): the night share of the world around him
-const worldAtPlayer = () => { const p = G.player.pos; return G.duality.worldAt(p[0], p[1] + 1, p[2]); };
-
-// «Вглядеться» (main.js peer / stopPeer / updatePeer): a toggle, held → every 0.6 s
-const peer = () => {
-  if (G.chapter >= 9) { G.say('Тьма и так повсюду. Вглядываться не во что.', 3); return; }
-  if (worldAtPlayer() > 0.5) { G.say('Я и так вижу… слишком много.', 2.5); return; }
-  G.toNight(600, { speed: 40 });
-  G.peering = true;
-  G.stab(-3);
-  G.flags.peered = (G.flags.peered || 0) + 1;
-  if (G.flags.peered === 1) G.say('Если смотреть долго — сон расступается. Мне страшно, но под ним — правда.', 4.5);
-  if (G.story.onPeer) G.story.onPeer();
-};
-const updatePeer = (dt, eye) => {
-  const D = G.duality;
-  const avail = !!G.flags.eye && G.chapter <= 8 && !G.cineLock;
-  G.eyeCool = Math.max(0, G.eyeCool - dt);
-  if (G.peering && (D.target !== 1 || !avail)) G.peering = false; // the world changed by itself
-  if (!avail) return;
-  if (eye && G.eyeCool <= 0) { G.eyeCool = 0.6; if (G.peering) G.stopPeer(); else peer(); }
-  if (G.peering && D.stability < 12) { G.stopPeer(); G.say('Хватит… Глаза режет. Ещё немного — и я там останусь.', 3.5); }
-};
+// the rules of the two worlds (script/game/world_rules.js), given by boot
+let WR = null;
 
 // what the native side reads after each tick (Float64Array, see crates/script WorldState)
 const ST = new Float64Array(21);
@@ -265,22 +238,10 @@ globalThis.__tick = (dt, px, py, pz, yaw, eye) => {
   const p = G.player;
   p.pos[0] = px; p.pos[1] = py; p.pos[2] = pz; p.yaw = yaw;
   const D = G.duality;
+  let w = 0;
   try {
-    // anchors → dream bubbles (main.js: D.bubbles from the story's anchors)
-    D.bubbles.length = 0;
-    for (const a of G.anchors) if (!a.cond || a.cond()) D.bubbles.push([a.pos[0], a.pos[1], a.pos[2], a.r]);
-    D.update(dt, p.pos, false);
-    const w = worldAtPlayer() > 0.5 ? 1 : 0;
-    G.nightSmooth += (w - G.nightSmooth) * Math.min(1, dt * 7);
-    // stability: drained in the nightmare, restored in the dream (main.js)
-    if (!G.cineLock) {
-      if (w) { if (!(G.time < G.stoneUntil)) G.stab(-D.drain * (G.story.drainMul ? G.story.drainMul() : 1) * dt); }
-      else G.stab(D.regen * (G.has('locket') ? 1.6 : 1) * dt);
-      if (D.stability < 25 && !G.lowWarned && !D.baseNight) { G.lowWarned = true; D.flicker = 5; G.say('Я теряю себя… Нужно где-то сесть, у огня, у скамейки. Где угодно.', 4); }
-      if (D.stability > 45) G.lowWarned = false;
-      if (D.stability <= 0) emit({ t: 'collapse' }); // respawn («collapse», main.js): not ported yet
-    }
-    updatePeer(dt, !!eye);
+    // main.js update order: the world (anchors, wave, night share) → … → «вглядеться» → stability
+    w = WR.updateWorld(G, dt, false, false);
   } catch (e) { log('world: ' + (e && e.stack || e)); }
   for (let i = G.waits.length - 1; i >= 0; i--) {
     if (G.time >= G.waits[i].t) { const w = G.waits[i]; G.waits.splice(i, 1); w.res(); }
@@ -294,19 +255,22 @@ globalThis.__tick = (dt, px, py, pz, yaw, eye) => {
       else if (!inside) t.inside = false;
     }
     for (const f of G.updaters) f(dt);
+    WR.updatePeer(G, dt, !!eye);
+    WR.updateStability(G, dt, w);
+    if (G.respawning && D.stability > 0) G.respawning = false;
   } catch (e) { log('update: ' + (e && e.stack || e)); }
   // the world state for the native renderer and the collisions
-  const W = D.wave, night = worldAtPlayer() > 0.5;
+  const W = D.wave, night = WR.worldAtPlayer(G) > 0.5;
   ST[0] = night ? 1 : 0; ST[1] = G.nightSmooth;
   ST[2] = W.c[0]; ST[3] = W.c[1]; ST[4] = W.c[2]; ST[5] = W.r;
   ST[6] = W.from; ST[7] = W.to; ST[8] = W.active ? 1 : 0; ST[9] = D.base;
   ST[10] = W.oc[0]; ST[11] = W.oc[1]; ST[12] = W.oc[2]; ST[13] = W.active ? W.ro : 0;
   ST[14] = D.stability; ST[15] = D.flicker; ST[16] = G.peering ? 1 : 0; ST[17] = D.baseNight ? 1 : 0;
   // main.js cullMask: which worlds the chunks show (1 dream, 2 nightmare, 3 both: per pixel)
-  ST[18] = (!W.active && D.bubbles.length === 0 && D.flicker <= 0 && !G.voidMode) ? (D.base ? 2 : 1) : 3;
+  ST[18] = WR.cullMask(G);
   ST[19] = D.bubbles.length;
   // «вглядеться» is offered (main.js updatePeer: the flag, the chapters up to 8, no cinematic)
-  ST[20] = (!!G.flags.eye && G.chapter <= 8 && !G.cineLock) ? 1 : 0;
+  ST[20] = WR.eyeAvailable(G) ? 1 : 0;
   if (G.busy || G.cineLock) { cur = null; prompt(null); return; }
   los.playerPos = p.pos; los.playerYaw = yaw; los.camPos = p.camPos; los.camForward = camFwd;
   let best = null, bs = Infinity;
