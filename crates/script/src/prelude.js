@@ -20,6 +20,35 @@ const pending = new Map();
 let nextId = 1;
 const ask = (e) => new Promise((res) => { const id = nextId++; pending.set(id, res); emit(Object.assign({ id }, e)); });
 
+// G.figures (creatures.js Figures): witnesses and NPCs the story places (story/figures.js). The native side gets the
+// model names with the event 'figures' when the list changes and, each tick, where they stand (__FIG)
+const MAXF = 32;
+const FIG = new Float64Array(1 + MAXF * 7);
+globalThis.__FIG = FIG;
+const figures = {
+  list: [],
+  add(o) {
+    const f = Object.assign({ visible: true, mask: 1, yaw: 0, scale: 1 }, o);
+    this.list.push(f);
+    emit({ t: 'figures', models: this.list.map((g) => String(g.model)) });
+    return f;
+  },
+  clear() { this.list.length = 0; emit({ t: 'figures', models: [] }); },
+};
+const writeFigures = () => {
+  let n = 0;
+  const L = figures.list;
+  for (let i = 0; i < L.length && n < MAXF; i++) {
+    const f = L[i];
+    if (!f.visible) continue;
+    const o = 1 + n * 7;
+    FIG[o] = i; FIG[o + 1] = f.pos[0]; FIG[o + 2] = f.pos[1]; FIG[o + 3] = f.pos[2];
+    FIG[o + 4] = f.yaw; FIG[o + 5] = f.mask; FIG[o + 6] = f.scale;
+    n++;
+  }
+  FIG[0] = n;
+};
+
 const actor = () => ({ visible: false, pos: [0, 0, 0], yaw: 0, speed: 0, target: null, fade: 1 });
 let ITEMS = {};
 let scoreInteractable = null;
@@ -122,7 +151,7 @@ const G = quiet({
   deer: actor(), rabbit: actor(), mike: actor(), shadow: actor(),
   models: new Proxy({}, { get: (t, k) => (typeof k === 'string' && k !== 'then' ? k : undefined) }),
   ui, memoryBoard,
-  audio: stub, emit: stub, world, figures: quiet({ list: [], add: () => stub, clear() {} }),
+  audio: stub, emit: stub, world, figures,
   streamer: quiet({ loadChapter: () => Promise.resolve(), burst() {} }),
 
   interact(o) { const it = Object.assign({ r: 2.2, world: 'any', icon: 'hand', label: 'Осмотреть' }, o); this.interactables.push(it); return it; },
@@ -287,6 +316,7 @@ globalThis.__tick = (dt, px, py, pz, yaw, eye, onGround) => {
     PR.updateHeadache(G, dt);
     WR.updateStability(G, dt, w);
   } catch (e) { log('update: ' + (e && e.stack || e)); }
+  writeFigures();
   // the world state for the native renderer and the collisions
   const W = D.wave;
   ST[0] = night ? 1 : 0; ST[1] = G.nightSmooth;

@@ -41,7 +41,7 @@ jobs:
       - name: export + validate
         if: steps.cmp.outputs.skip != '1'
         run: |
-          node game/tools/export-native.mjs "$PWD/pack"
+          node game/tools/export-native.mjs "$PWD/pack" instances="$PWD/app/src/main/assets/pack/models"
           cargo run --release -p mezdu-core --bin packcheck -- pack
           python3 tools/bundle_pack.py pack app/src/main/assets/pack
           mkdir flat && (cd pack && find . -type f | sed 's|^\./||' | while read f; do cp "$f" "../flat/${f//\//__}"; done)

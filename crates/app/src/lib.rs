@@ -112,6 +112,9 @@ struct Hud {
     sel: usize,
     /// the story's colliders by id: box and whether it blocks
     colliders: HashMap<u32, ([f32; 6], bool)>,
+    /// the story's figures (G.figures): model index per list entry (u32::MAX: not in the pack), where they stand
+    fig_models: Vec<u32>,
+    figs: Vec<mezdu_script::Figure>,
 }
 
 /// megabytes with one decimal, as the loading screen shows them ("9,8 МБ")
@@ -735,7 +738,7 @@ impl App {
         let hero = pack.as_ref().and_then(|p| match Voxels::load(p) {
             Ok(vox) => {
                 let player = Player::new(&vox);
-                Some(Hero { vox: Rc::new(std::cell::RefCell::new(vox)), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] })
+                Some(Hero { vox: Rc::new(std::cell::RefCell::new(vox)), player, rig: None, words: Vec::with_capacity(16 * mezdu_gfx::props::DYN), joy: None, look: [0.0; 2] })
             }
             Err(e) => {
                 log::warn!("no voxels: {e}");
@@ -824,7 +827,7 @@ impl App {
                     (Some(h), Some(v)) => h.vox = Rc::new(std::cell::RefCell::new(v)),
                     (None, Some(vox)) => {
                         let player = Player::new(&vox);
-                        self.hero = Some(Hero { vox: Rc::new(std::cell::RefCell::new(vox)), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] });
+                        self.hero = Some(Hero { vox: Rc::new(std::cell::RefCell::new(vox)), player, rig: None, words: Vec::with_capacity(16 * mezdu_gfx::props::DYN), joy: None, look: [0.0; 2] });
                     }
                     _ => {}
                 }
@@ -1073,6 +1076,13 @@ impl App {
                 }
                 E::Inventory => self.hud.items = sc.inventory(),
                 E::Menu => self.screen = Screen::Menu,
+                E::Figures(models) => {
+                    let names = self.world.as_ref().map(|w| w.model_names()).unwrap_or_default();
+                    self.hud.fig_models = models.iter().map(|m| names.iter().position(|n| n == m).map_or(u32::MAX, |i| i as u32)).collect();
+                    if let Some(m) = models.iter().zip(&self.hud.fig_models).find(|(_, &i)| i == u32::MAX) {
+                        log::warn!("figure model {} is not in the pack", m.0);
+                    }
+                }
                 // the mind gave out: the collapse back to the road is not ported yet (the hero stays where he is)
                 E::Collapse => log::warn!("stability 0: the collapse to the road is not ported yet"),
             }
@@ -1587,6 +1597,15 @@ impl App {
                 h.words.clear();
                 if matches!(self.screen, Screen::Playing | Screen::Paused | Screen::Bag) {
                     write_rig(&mut h.words, rig, focus.to_array(), h.player.yaw, h.player.walking && playing, h.player.phase, h.player.speed, time);
+                    // the witnesses and NPCs where the story stands them (creatures.js Figures.write: writeSimple)
+                    if let Some(sc) = &self.script {
+                        sc.figures(&mut self.hud.figs);
+                        for f in &self.hud.figs {
+                            if let Some(&mi) = self.hud.fig_models.get(f.idx).filter(|&&i| i != u32::MAX) {
+                                mezdu_game::rig::instance(&mut h.words, &mezdu_game::rig::m34_trs(f.pos[0], f.pos[1], f.pos[2], f.yaw, 0.0, 0.0, f.scale), mi, f.mask);
+                            }
+                        }
+                    }
                 }
                 w.set_dynamic(&g.queue, &h.words);
             }

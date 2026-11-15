@@ -43,7 +43,8 @@ pub fn m34_mul(a: &M34, b: &M34) -> M34 {
     o
 }
 
-fn inst(out: &mut Vec<u32>, m: &M34, model: u32, mask: u32) {
+/// one instance as Game.packStatic writes it: 3x4 matrix, model, mask, phase, 0
+pub fn instance(out: &mut Vec<u32>, m: &M34, model: u32, mask: u32) {
     out.extend(m.iter().map(|f| f.to_bits()));
     out.extend_from_slice(&[model, mask, 0f32.to_bits(), 0f32.to_bits()]);
 }
@@ -79,14 +80,14 @@ pub fn write_rig(out: &mut Vec<u32>, m: &RigModels, pos: [f32; 3], yaw: f32, wal
     let (hip_y, sh_y, neck_y, hip_x, sh_x) = (0.78, 1.27, 1.31, 0.112, 0.29);
     let mask = 3;
     let part = |out: &mut Vec<u32>, model: u32, jx: f32, jy: f32, jz: f32, pitch: f32, yaw: f32, roll: f32| {
-        inst(out, &m34_mul(&root, &m34_trs(jx, jy, jz, yaw, pitch, roll, 1.0)), model, mask);
+        instance(out, &m34_mul(&root, &m34_trs(jx, jy, jz, yaw, pitch, roll, 1.0)), model, mask);
     };
     part(out, m.torso, 0.0, hip_y - 0.02, 0.0, torso_p, 0.0, 0.0);
     part(out, m.head, 0.0, neck_y - torso_p * 0.1, torso_p * 0.25, head_p, head_y, 0.0);
     let arm = |out: &mut Vec<u32>, um: u32, fm: u32, jx: f32, pitch: f32, roll: f32, elbow: f32| {
         let upper = m34_mul(&root, &m34_trs(jx, sh_y, torso_p * 0.15, 0.0, pitch, roll, 1.0));
-        inst(out, &upper, um, mask);
-        inst(out, &m34_mul(&upper, &m34_trs(0.0, -0.17, 0.0, 0.0, elbow, 0.0, 1.0)), fm, mask);
+        instance(out, &upper, um, mask);
+        instance(out, &m34_mul(&upper, &m34_trs(0.0, -0.17, 0.0, 0.0, elbow, 0.0, 1.0)), fm, mask);
     };
     arm(out, m.uarm_l, m.farm_l, sh_x, arm_l, arm_roll_l + 0.05, elb_l);
     arm(out, m.uarm, m.farm, -sh_x, arm_r, arm_roll_r - 0.05, elb_r);

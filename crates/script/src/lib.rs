@@ -49,6 +49,19 @@ pub enum Event {
     /// the backpack changed
     Inventory,
     Menu,
+    /// the story's figures (G.figures) changed: their model names, in list order (`Script::figures` gives where
+    /// the visible ones stand, by index into this list)
+    Figures(Vec<String>),
+}
+
+/// A witness or NPC where the story put it (creatures.js Figures)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Figure {
+    pub idx: usize,
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub mask: u32,
+    pub scale: f32,
 }
 
 /// The dream and the nightmare as the scripts have them (the web's Duality): where the hero stands, the transition
@@ -232,6 +245,22 @@ impl Script {
         self.call("__tick", (dt, pos[0], pos[1], pos[2], yaw, eye, on_ground));
     }
 
+    /// the visible figures after the last tick: (index into the last `Event::Figures` list, x, y, z, yaw, mask,
+    /// scale), written into `out` (cleared first; no allocation once it has grown)
+    pub fn figures(&self, out: &mut Vec<Figure>) {
+        out.clear();
+        self.ctx.with(|ctx| {
+            let Ok(a) = ctx.globals().get::<_, rquickjs::TypedArray<f64>>("__FIG") else { return };
+            // SAFETY: as in `world`
+            let v = unsafe { a.as_slice() };
+            let n = v.first().map_or(0, |&n| n as usize).min((v.len().saturating_sub(1)) / 7);
+            for k in 0..n {
+                let o = 1 + k * 7;
+                out.push(Figure { idx: v[o] as usize, pos: [v[o + 1] as f32, v[o + 2] as f32, v[o + 3] as f32], yaw: v[o + 4] as f32, mask: v[o + 5] as u32, scale: v[o + 6] as f32 });
+            }
+        });
+    }
+
     /// the world as the scripts have it after the last tick (no allocation: the script keeps one array)
     pub fn world(&self) -> WorldState {
         self.ctx.with(|ctx| {
@@ -358,6 +387,7 @@ fn event(e: &serde_json::Value) -> Option<Event> {
         "edit" => Event::Edit { name: s("name"), on: e["on"].as_bool().unwrap_or(false) },
         "inv" => Event::Inventory,
         "menu" => Event::Menu,
+        "figures" => Event::Figures(e["models"].as_array()?.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect()),
         _ => return None,
     })
 }
@@ -574,13 +604,20 @@ mod dialogue {
         let pack = mezdu_core::Pack::open(&dir).unwrap();
         let s = Script::new(sources(&pack).unwrap(), Rc::new(Flat)).unwrap();
         s.new_game();
-        s.drain();
+        let models = s.drain().into_iter().filter_map(|e| if let Event::Figures(m) = e { Some(m) } else { None }).last().unwrap_or_default();
+        let anna = models.iter().position(|m| m == "figure_anna").expect("Анна stands in chapter 1");
         let pos = s.ctx.with(|ctx| ctx.eval::<Vec<f64>, _>("G.interactables.find(i => String(typeof i.label === 'function' ? i.label() : i.label).includes('Анна')).pos").unwrap());
         let (x, y, z) = (pos[0] as f32, pos[1] as f32, pos[2] as f32);
         let feet = [x - 0.6, y - 1.0, z];
         let fwd = [1.0, 0.0, 0.0];
         s.tick(0.1, feet, std::f32::consts::FRAC_PI_2, [x - 3.0, y + 1.0, z], fwd, false, true);
         assert!(s.drain().iter().any(|e| matches!(e, Event::Prompt { label, .. } if label.contains("Анна"))));
+        let mut figs = Vec::new();
+        s.figures(&mut figs);
+        let f = figs.iter().find(|f| f.idx == anna).expect("her figure is drawn");
+        assert!((f.pos[0] - x).abs() < 2.0 && (f.pos[2] - z).abs() < 2.0, "where she talks: {:?} vs {x} {z}", f.pos);
+        // she turns to the hero (figures.js onUpdate)
+        assert!((f.yaw - (feet[0] - f.pos[0]).atan2(feet[2] - f.pos[2])).abs() < 1e-3);
         s.act();
         let next = |s: &Script| loop {
             s.tick(0.1, feet, 1.57, [x - 3.0, y + 1.0, z], fwd, false, true);

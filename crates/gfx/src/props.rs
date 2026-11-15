@@ -8,6 +8,8 @@ use wgpu::util::DeviceExt;
 pub struct Props {
     pub meta: Vec<ModelMeta>,
     radius: Vec<f32>,
+    /// visible-list slots per model (its static instances + DYN_PER_MODEL)
+    cap: Vec<u32>,
     inst: Vec<u32>,
     n: usize,
     n_dyn: usize,
@@ -34,8 +36,10 @@ pub struct Props {
 }
 
 const W: usize = 16; // words per instance
-/// instances the game writes every frame (the hero's rig parts...), after the static ones
-pub const DYN: usize = 16;
+/// instances the game writes every frame (the hero's rig parts, the story's figures), after the static ones
+pub const DYN: usize = 48;
+/// how many dynamic instances one model may have in a frame (the rig draws the leg twice, ch. 7 has four figure_n)
+const DYN_PER_MODEL: u32 = 4;
 
 impl Props {
     pub fn new(d: &wgpu::Device, pack: &Pack) -> Result<Option<Self>, String> {
@@ -46,8 +50,7 @@ impl Props {
         let faces = pack.read_data("models/faces.bin.zst")?;
         let mut inst = u32s(&pack.read_data("models/instances.bin.zst")?);
         let n = inst.len() / W;
-        // every model may also be used twice by the dynamic slots (the rig draws the leg twice)
-        let mut cap = vec![2u32; meta.len()];
+        let mut cap = vec![DYN_PER_MODEL; meta.len()];
         for i in 0..n {
             cap[inst[i * W + 12] as usize] += 1;
         }
@@ -85,6 +88,7 @@ impl Props {
         let home = (0..n).map(|i| [3, 7, 11].map(|k| f32::from_bits(inst[i * W + k]))).collect();
         let mask0 = (0..n).map(|i| if inst[i * W + 13] & 3 == 0 { inst[i * W + 13] | 3 } else { inst[i * W + 13] }).collect();
         Ok(Some(Props {
+            cap,
             mask0,
             home,
             max_quads: meta.iter().map(|m| m.face_count).max().unwrap_or(1),
@@ -194,6 +198,9 @@ impl Props {
                 continue;
             }
             let slot = self.count[mi];
+            if slot >= self.cap[mi] {
+                continue;
+            }
             self.vis_cpu[(self.vis_base[mi] + slot) as usize] = i as u32;
             self.count[mi] += 1;
         }
@@ -214,6 +221,9 @@ impl Props {
                 continue;
             }
             let slot = self.count_shadow[k][mi];
+            if slot >= self.cap[mi] {
+                continue;
+            }
             self.vis_shadow_cpu[(self.vis_base[mi] + slot) as usize] = i as u32;
             self.count_shadow[k][mi] += 1;
         }
