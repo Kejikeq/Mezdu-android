@@ -99,7 +99,10 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
     // the game library itself: a newer one is downloaded now and starts with the next launch
     if let (Some(abi), false) = (ABI, BUILD.is_empty()) {
         let prev = st.lock().map(|s| s.notes[0].clone()).unwrap_or_default();
-        match mezdu_updater::check_code(&data_dir, abi, BUILD, &|done, total| note(0, format!("{prev}; программа: {} из {}", mb(done), mb(total)))) {
+        match mezdu_updater::check_code(&data_dir, abi, BUILD, &|done, total| {
+            set(0, done as f32 / total.max(1) as f32);
+            note(0, format!("программа: {} из {}", mb(done), mb(total)));
+        }) {
             Ok(mezdu_updater::CodeOutcome::Staged { build, .. }) => note(0, format!("{prev}; программа {build} скачана, заработает при следующем запуске")),
             Ok(mezdu_updater::CodeOutcome::NeedApk { build }) => note(0, format!("{prev}; программа {build} требует установить новый APK")),
             Ok(mezdu_updater::CodeOutcome::UpToDate) => note(0, prev),
@@ -109,6 +112,12 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
             }
         }
     }
+    // every stage ends with a full bar, shown for a moment
+    let done = |stage: usize| {
+        set(stage, 1.0);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    };
+    done(0);
     // 2. integrity: every file against the manifest's sha256; broken ones are downloaded again
     set(1, 0.0);
     let dir = fixed.unwrap_or_else(|| data_dir.join("pack"));
@@ -129,6 +138,7 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
         }
         note(1, format!("восстановлено файлов: {}", bad.len()));
     }
+    done(1);
     // 3-4. shaders for this GPU, then the world (pipelines through the on-disk cache)
     let world = mezdu_gfx::build_world(&ctx, &pack, 1, &data_dir.join("pipeline-cache"), &|stage, f| set(2 + stage as usize, f)).map_err(|e| {
         if ctx.backend == mezdu_gfx::wgpu::Backend::Gl {
@@ -138,6 +148,7 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
         }
     })?;
     note(2, format!("{} шейдеров", pack.manifest.of_kind("shader").count()));
+    done(3);
     note(3, format!("{} участков, {} квадов", world.chunks(), world.quads));
     set(4, 1.0);
     let vox = Voxels::load(&pack).ok();
@@ -239,7 +250,7 @@ fn logo(ui: &mut egui::Ui, size: f32, t: f32) {
     }
 }
 
-/// One loading bar for all the stages: a dark track, the done part as a gradient from the nightmare's ember to the
+/// The loading bar of the current stage (it starts again with every stage): a dark track, the done part as a gradient from the nightmare's ember to the
 /// accent with a soft glow; while a stage has no measure yet a light runs along the done part.
 fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
     let h = 6.0;
@@ -561,11 +572,13 @@ impl App {
                         let (stage, frac, notes) = load.1.map_or((STAGES.len(), 1.0, Default::default()), |(a, b, c)| (*a, *b, c.clone()));
                         // one line over one bar: the stage, and what it is doing now
                         let i = stage.min(STAGES.len() - 1);
-                        let status = if notes[i].is_empty() { STAGES[i].to_string() } else { format!("{} · {}", STAGES[i], notes[i]) };
+                        let n = STAGES.len();
+                        let status = if notes[i].is_empty() { format!("{}/{n} · {}", i + 1, STAGES[i]) } else { format!("{}/{n} · {} · {}", i + 1, STAGES[i], notes[i]) };
                         ui.label(egui::RichText::new(status).size(14.0).color(INK.gamma_multiply(0.8)));
                         ui.add_space(8.0);
-                        let all = ((stage as f32 + frac.clamp(0.0, 1.0)) / STAGES.len() as f32).clamp(0.0, 1.0);
-                        progress_bar(ui, w, all, load.0, err.is_none() && frac < 0.001);
+                        // the bar runs from the start to the end within every stage
+                        let cur = if stage >= STAGES.len() { 1.0 } else { frac.clamp(0.0, 1.0) };
+                        progress_bar(ui, w, cur, load.0, err.is_none() && cur < 0.001);
                         if let Some(e) = err {
                             ui.add_space(12.0);
                             ui.label(egui::RichText::new(e).size(14.0).color(egui::Color32::from_rgb(0xe0, 0x50, 0x3f)));

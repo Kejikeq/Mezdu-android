@@ -224,6 +224,8 @@ pub fn build_world(ctx: &DeviceCtx, pack: &mezdu_core::Pack, chapter: u32, cache
             return Err(format!("шейдер {name}: {e}"));
         }
     }
+    progress(0, 1.0);
+    std::thread::sleep(std::time::Duration::from_millis(150));
     progress(1, 0.0);
     let key = wgpu::util::pipeline_cache_key(&ctx.info).filter(|_| d.features().contains(wgpu::Features::PIPELINE_CACHE));
     let file = key.map(|k| cache_dir.join(k));
