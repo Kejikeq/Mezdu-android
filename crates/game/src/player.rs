@@ -38,6 +38,8 @@ pub struct Player {
     dir: [f32; 3],
     /// the story's boxes (a closed door...) as duality.js hitsPropCollider sees them: min x y z, max x y z
     pub colliders: Vec<[f32; 6]>,
+    /// the hero stands in the nightmare: the walls, the ground and the camera's view are the nightmare's
+    pub night: bool,
 }
 
 fn angle_lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -72,6 +74,7 @@ impl Player {
             tgt: [0.0; 3],
             dir: [0.0; 3],
             colliders: Vec::new(),
+            night: false,
         }
     }
 
@@ -90,7 +93,7 @@ impl Player {
         let mut y = hint;
         for vy in (1..=top.min(w.wy - 1)).rev() {
             let yy = vy as f32 * w.vs;
-            if w.solid_m(x, yy - 0.05, z) && !self.collides(x, yy, z, w) {
+            if w.solid_m_in(x, yy - 0.05, z, self.night) && !self.collides(x, yy, z, w) {
                 y = yy;
                 break;
             }
@@ -109,7 +112,7 @@ impl Player {
         for vy in y0..=y1 {
             for vz in z0..=z1 {
                 for vx in x0..=x1 {
-                    if w.solid(vx, vy, vz) {
+                    if w.solid_in(vx, vy, vz, self.night) {
                         return true;
                     }
                 }
@@ -213,8 +216,8 @@ impl Player {
     }
 
     /// player.js _solid: solid and not foliage (the camera passes through leaves)
-    fn cam_solid(w: &Voxels, x: f32, y: f32, z: f32) -> bool {
-        let m = w.mat((x / w.vs).floor() as i32, (y / w.vs).floor() as i32, (z / w.vs).floor() as i32);
+    fn cam_solid(w: &Voxels, night: bool, x: f32, y: f32, z: f32) -> bool {
+        let m = w.mat_in((x / w.vs).floor() as i32, (y / w.vs).floor() as i32, (z / w.vs).floor() as i32, night);
         let fl = w.flags(m);
         fl & F_SOLID != 0 && fl & F_LEAF == 0
     }
@@ -224,7 +227,7 @@ impl Player {
         let (tg, d) = (self.tgt, self.dir);
         let mut t = 0.1;
         while t <= max_t {
-            if Self::cam_solid(w, tg[0] + d[0] * t, tg[1] + d[1] * t, tg[2] + d[2] * t) {
+            if Self::cam_solid(w, self.night, tg[0] + d[0] * t, tg[1] + d[1] * t, tg[2] + d[2] * t) {
                 return Some(t);
             }
             t += 0.04;
@@ -242,7 +245,7 @@ impl Player {
         self.cam_pitch = (self.cam_pitch + inp.look[1] * 0.0036).clamp(-0.55, 1.25);
         self.look_idle = if looked { 0.0 } else { self.look_idle + dt };
         let p = self.pos;
-        self.indoor = [2.4, 3.4, 3.8, 4.2].iter().any(|&h| Self::cam_solid(w, p[0], p[1] + h, p[2]));
+        self.indoor = [2.4, 3.4, 3.8, 4.2].iter().any(|&h| Self::cam_solid(w, self.night, p[0], p[1] + h, p[2]));
         if self.cam_tight > 0.3 && self.speed > 0.6 && self.look_idle > 1.0 {
             let d = (self.yaw - self.cam_yaw).sin().atan2((self.yaw - self.cam_yaw).cos());
             self.cam_yaw += d * (dt * 1.6 * self.cam_tight).min(1.0);
@@ -252,7 +255,7 @@ impl Player {
         let base_y = self.vis_y + 1.38;
         let mut s = 0.08;
         while s <= shoulder_want + 0.2 {
-            if Self::cam_solid(w, p[0] + rx * s, base_y, p[2] + rz * s) {
+            if Self::cam_solid(w, self.night, p[0] + rx * s, base_y, p[2] + rz * s) {
                 shoulder_want = (s - 0.24).max(0.0);
                 break;
             }
@@ -281,7 +284,7 @@ impl Player {
         let (tg, dr) = (self.tgt, self.dir);
         let (mut cx, mut cy, mut cz) = (tg[0] + dr[0] * dd, tg[1] + dr[1] * dd + lift, tg[2] + dr[2] * dd);
         let r = 0.2;
-        let sol = |x: f32, y: f32, z: f32| Self::cam_solid(w, x, y, z);
+        let sol = |x: f32, y: f32, z: f32| Self::cam_solid(w, self.night, x, y, z);
         if sol(cx + rx * r, cy, cz + rz * r) && !sol(cx - rx * r, cy, cz - rz * r) {
             cx -= rx * r * 0.7;
             cz -= rz * r * 0.7;

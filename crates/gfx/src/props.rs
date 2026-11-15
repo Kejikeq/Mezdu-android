@@ -167,11 +167,12 @@ impl Props {
     }
 
     /// CULL_SHADER cullMain for the dream world (no transition wave), draw-distance and switch multipliers 1.
-    pub fn cull(&mut self, q: &wgpu::Queue, cam: [f32; 3], planes: &[[f32; 4]; 6]) {
+    /// `world`: the worlds the chunks show (1 dream, 2 nightmare, 3 both: then the shader's per-pixel world decides)
+    pub fn cull(&mut self, q: &wgpu::Queue, cam: [f32; 3], planes: &[[f32; 4]; 6], world: u32) {
         self.count.iter_mut().for_each(|c| *c = 0);
         for i in 0..self.n + self.n_dyn {
             let (mask, mi) = (self.inst[i * W + 13], self.inst[i * W + 12] as usize);
-            if mask & 1 == 0 {
+            if mask & world == 0 {
                 continue;
             }
             let m = &self.meta[mi];
@@ -200,11 +201,11 @@ impl Props {
     }
 
     /// CULL_SHADER cullShadow for cascade `k`: casters (flag 1) within `ext` of the cascade centre.
-    pub fn cull_shadow(&mut self, q: &wgpu::Queue, k: usize, cx: f32, cz: f32, ext: f32) {
+    pub fn cull_shadow(&mut self, q: &wgpu::Queue, k: usize, cx: f32, cz: f32, ext: f32, world: u32) {
         self.count_shadow[k].iter_mut().for_each(|c| *c = 0);
         for i in 0..self.n + self.n_dyn {
             let (mask, mi) = (self.inst[i * W + 13], self.inst[i * W + 12] as usize);
-            if mask & 1 == 0 || mask & 16 != 0 || self.meta[mi].flags & 1 == 0 {
+            if mask & world == 0 || mask & 16 != 0 || self.meta[mi].flags & 1 == 0 {
                 continue;
             }
             let (p, s) = self.pos(i);

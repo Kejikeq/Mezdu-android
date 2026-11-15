@@ -99,6 +99,31 @@ impl Voxels {
         }
     }
 
+    /// duality.js solid in the given world: the nightmare's material is the high byte of a voxel
+    pub fn solid_in(&self, x: i32, y: i32, z: i32, night: bool) -> bool {
+        if y < 0 {
+            return true;
+        }
+        if y >= self.wy {
+            return false;
+        }
+        match self.vox(x, y, z) {
+            Some(v) => {
+                let m = if night { (v >> 8) as usize } else { (v & 255) as usize };
+                self.flags[m] & F_SOLID != 0
+            }
+            None => true,
+        }
+    }
+
+    pub fn solid_m_in(&self, x: f32, y: f32, z: f32, night: bool) -> bool {
+        self.solid_in((x / self.vs).floor() as i32, (y / self.vs).floor() as i32, (z / self.vs).floor() as i32, night)
+    }
+
+    pub fn mat_in(&self, x: i32, y: i32, z: i32, night: bool) -> u8 {
+        self.vox(x, y, z).map_or(0, |v| if night { (v >> 8) as u8 } else { (v & 255) as u8 })
+    }
+
     pub fn solid_m(&self, x: f32, y: f32, z: f32) -> bool {
         self.solid((x / self.vs).floor() as i32, (y / self.vs).floor() as i32, (z / self.vs).floor() as i32)
     }

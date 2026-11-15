@@ -35,11 +35,42 @@ pub enum Event {
     Move { model: String, home: [f32; 3], to: [f32; 3], yaw: f32 },
     /// a story box the hero cannot walk through while `on` (min x y z, max x y z)
     Collider { id: u32, aabb: [f32; 6], on: bool },
+    /// the mind gave out (stability 0): the hero collapses back to the road (not ported yet)
+    Collapse,
     /// a world edit (worldgen.js EDIT_BOXES) opened or closed
     Edit { name: String, on: bool },
     /// the backpack changed
     Inventory,
     Menu,
+}
+
+/// The dream and the nightmare as the scripts have them (the web's Duality): where the hero stands, the transition
+/// wave (a sphere whose inside shows the target world) and its reversed outer front, the stability of the mind.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorldState {
+    /// the world at the hero's head is the nightmare
+    pub night: bool,
+    /// 0 dream .. 1 nightmare, eased (the sky, the light and the exposure follow it)
+    pub night_share: f32,
+    pub wave_c: [f32; 3],
+    pub wave_r: f32,
+    /// world ids: 0 dream, 1 nightmare
+    pub wave_from: u8,
+    pub wave_to: u8,
+    pub wave_active: bool,
+    /// the world the chunks show when no wave runs
+    pub base: u8,
+    /// outer front of a reversed wave (radius 0 = none)
+    pub wave2_c: [f32; 3],
+    pub wave2_r: f32,
+    /// 0..100: the mind; the nightmare drains it
+    pub stability: f32,
+    /// «вглядеться» is on
+    pub peering: bool,
+    /// which worlds the chunks show: 1 dream, 2 nightmare, 3 both (per pixel) — main.js cullMask
+    pub cull: u32,
+    /// «вглядеться» is offered now (the story's flag, the chapters up to 8, no cinematic)
+    pub eye_available: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +86,8 @@ const PRELUDE: &str = include_str!("prelude.js");
 const BOOT: &str = "import { setupStory } from 'game/story.js';\n\
 import { ITEMS } from 'game/items.js';\n\
 import { scoreInteractable } from 'game/interaction_los.js';\n\
-await globalThis.__boot({ setupStory, ITEMS, scoreInteractable });\n";
+import { Duality } from 'game/duality.js';\n\
+await globalThis.__boot({ setupStory, ITEMS, scoreInteractable, Duality });\n";
 
 /// module names are paths under script/ ("game/story.js"); imports are relative to the importing module
 struct PackResolver;
@@ -168,10 +200,40 @@ impl Script {
         self.call("__newGame", ());
     }
 
-    /// every frame of play: feet, facing, camera and its forward vector
-    pub fn tick(&self, dt: f32, pos: [f32; 3], yaw: f32, cam: [f32; 3], fwd: [f32; 3]) {
+    /// every frame of play: the camera (position, forward vector), then the hero (feet, facing) and «вглядеться»
+    /// held or not. Afterwards `world` reads what the frame needs.
+    pub fn tick(&self, dt: f32, pos: [f32; 3], yaw: f32, cam: [f32; 3], fwd: [f32; 3], eye: bool) {
         self.call("__cam", (cam[0], cam[1], cam[2], fwd[0], fwd[1], fwd[2]));
-        self.call("__tick", (dt, pos[0], pos[1], pos[2], yaw));
+        self.call("__tick", (dt, pos[0], pos[1], pos[2], yaw, eye));
+    }
+
+    /// the world as the scripts have it after the last tick (no allocation: the script keeps one array)
+    pub fn world(&self) -> WorldState {
+        self.ctx.with(|ctx| {
+            let Ok(st) = ctx.globals().get::<_, rquickjs::TypedArray<f64>>("__ST") else { return WorldState::default() };
+            // SAFETY: the array lives in the script's globals and is only read here, between two script calls
+            let v = unsafe { st.as_slice() };
+            if v.len() < 21 {
+                return WorldState::default();
+            }
+            let f = |i: usize| v[i] as f32;
+            WorldState {
+                night: v[0] > 0.5,
+                night_share: f(1),
+                wave_c: [f(2), f(3), f(4)],
+                wave_r: f(5),
+                wave_from: f(6) as u8,
+                wave_to: f(7) as u8,
+                wave_active: v[8] > 0.5,
+                base: f(9) as u8,
+                wave2_c: [f(10), f(11), f(12)],
+                wave2_r: f(13),
+                stability: f(14),
+                peering: v[16] > 0.5,
+                cull: v[18] as u32,
+                eye_available: v[20] > 0.5,
+            }
+        })
     }
 
     pub fn act(&self) {
@@ -251,6 +313,7 @@ fn event(e: &serde_json::Value) -> Option<Event> {
             let b = &e["box"];
             Event::Collider { id, aabb: [0, 1, 2, 3, 4, 5].map(|i| b[i].as_f64().unwrap_or(0.0) as f32), on: e["on"].as_bool().unwrap_or(true) }
         }
+        "collapse" => Event::Collapse,
         "edit" => Event::Edit { name: s("name"), on: e["on"].as_bool().unwrap_or(false) },
         "inv" => Event::Inventory,
         "menu" => Event::Menu,
@@ -298,13 +361,13 @@ mod tests {
         let found = s.ctx.with(|ctx| ctx.eval::<Vec<f64>, _>("G.interactables.find(i => String(typeof i.label === 'function' ? i.label() : i.label).startsWith('Стол в кабинете')).pos").unwrap());
         let (x, y, z) = (found[0] as f32, found[1] as f32, found[2] as f32);
         let feet = [x - 1.0, y - 0.7, z];
-        s.tick(0.1, feet, std::f32::consts::FRAC_PI_2, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0]);
+        s.tick(0.1, feet, std::f32::consts::FRAC_PI_2, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0], false);
         let ev = s.drain();
         assert!(ev.iter().any(|e| matches!(e, Event::Prompt { label, .. } if label.starts_with("Стол"))), "{ev:?}");
         s.act();
         let mut asked = None;
         for _ in 0..40 {
-            s.tick(0.5, feet, 1.57, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0]);
+            s.tick(0.5, feet, 1.57, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0], false);
             for e in s.drain() {
                 if let Event::Inspect { id, item, .. } = &e {
                     assert_eq!(item, "student_pass");
@@ -323,5 +386,66 @@ mod tests {
         assert!(s.inventory().is_empty());
         s.restore(&save);
         assert_eq!(s.inventory().len(), inv.len());
+    }
+}
+
+#[cfg(test)]
+mod nightmare {
+    use super::*;
+
+    struct Flat;
+    impl World for Flat {
+        fn solid(&self, _x: i32, y: i32, _z: i32) -> bool {
+            y < 0
+        }
+        fn ground(&self, _x: f32, _z: f32) -> f32 {
+            7.0
+        }
+    }
+
+    /// «вглядеться» (R) turns the world around the hero's head into the nightmare, then the dream comes back
+    /// (main.js peer / stopPeer): MEZDU_PACK=<pack with script/> cargo test -p mezdu-script
+    #[test]
+    fn peering_turns_the_world() {
+        let Ok(dir) = std::env::var("MEZDU_PACK") else { return };
+        let pack = mezdu_core::Pack::open(&dir).unwrap();
+        let s = Script::new(sources(&pack).unwrap(), Rc::new(Flat)).unwrap();
+        s.new_game();
+        let pos = [56.0, 7.0, 279.0];
+        let fwd = [1.0, 0.0, 0.0];
+        // a few frames of the dream
+        for _ in 0..3 {
+            s.tick(0.1, pos, 0.0, pos, fwd, false);
+        }
+        let w = s.world();
+        assert!(!w.night && w.cull == 1 && w.base == 0, "{w:?}");
+        // hold R: the nightmare comes in around the hero (the wave grows)
+        s.tick(0.1, pos, 0.0, pos, fwd, true);
+        let mut grew = false;
+        for _ in 0..30 {
+            s.tick(0.1, pos, 0.0, pos, fwd, false);
+            let w = s.world();
+            if w.wave_active && w.wave_r > 0.0 {
+                grew = true;
+                assert_eq!(w.cull, 3, "the wave shows both worlds");
+            }
+        }
+        assert!(grew, "the wave runs");
+        // the stability drops while looking (-3 at the start, then the nightmare drains)
+        assert!(s.world().peering);
+        let before = s.world().stability;
+        for _ in 0..40 {
+            s.tick(0.5, pos, 0.0, pos, fwd, false);
+        }
+        assert!(s.world().stability < before, "the nightmare drains the mind");
+        // R again: back to the dream
+        s.tick(0.1, pos, 0.0, pos, fwd, true);
+        for _ in 0..200 {
+            s.tick(0.1, pos, 0.0, pos, fwd, false);
+        }
+        let w = s.world();
+        assert!(!w.peering, "{w:?}");
+        assert_eq!(w.base, 0, "{w:?}");
+        assert!(!w.wave_active, "{w:?}");
     }
 }

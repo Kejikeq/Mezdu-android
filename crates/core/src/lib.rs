@@ -47,6 +47,9 @@ pub struct Manifest {
     pub constants: Constants,
     #[serde(rename = "perFrame")]
     pub per_frame: Option<PerFrame>,
+    /// the nightmare's exposure per chapter ("1".."10"); frame/ch<N>.bin holds the dream's
+    #[serde(rename = "nightExposure", default)]
+    pub night_exposure: std::collections::BTreeMap<String, f32>,
     pub files: Vec<FileEntry>,
 }
 

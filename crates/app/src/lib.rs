@@ -57,6 +57,22 @@ impl mezdu_script::World for VoxWorld {
     }
 }
 
+/// The story's worlds as the scene takes them (crates/gfx WorldFrame).
+fn world_frame(ws: &mezdu_script::WorldState) -> mezdu_gfx::world::WorldFrame {
+    mezdu_gfx::world::WorldFrame {
+        night_share: ws.night_share,
+        wave_c: ws.wave_c,
+        wave_r: ws.wave_r,
+        wave_from: ws.wave_from,
+        wave_to: ws.wave_to,
+        wave_active: ws.wave_active,
+        base: ws.base,
+        wave2_c: ws.wave2_c,
+        wave2_r: ws.wave2_r,
+        cull: ws.cull,
+    }
+}
+
 /// A window of the story over the game: a text to read or a thing found, answered by a button.
 #[derive(Clone)]
 enum Panel {
@@ -73,6 +89,8 @@ struct Hud {
     /// the action button: what it does here ("" = nothing near)
     prompt: String,
     panel: Option<Panel>,
+    /// «вглядеться» offered (Some(on) when offered: the button shows whether it is on)
+    eye: Option<bool>,
     /// the backpack as the scripts keep it, and the item looked at
     items: Vec<mezdu_script::Item>,
     sel: usize,
@@ -353,6 +371,15 @@ fn story_hud(ctx: &egui::Context, hud: &Hud, out: &mut Vec<Action>) {
         });
     }
     let sw = ctx.content_rect().width();
+    // «вглядеться»: offered by the story; the label says whether the eye is on (main.js ui.eye)
+    if let Some(on) = hud.eye.filter(|_| hud.panel.is_none()) {
+        egui::Area::new(egui::Id::unique("eye")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-146.0, 18.0)).show(ctx, |ui| {
+            let b = egui::Button::new(egui::RichText::new(if on { "Не смотреть" } else { "Вглядеться" }).size(12.0).color(if on { ACCENT } else { INK })).min_size(egui::vec2(124.0, 36.0)).wrap_mode(egui::TextWrapMode::Extend).corner_radius(18.0);
+            if ui.add(b).clicked() {
+                out.push(Action::Eye);
+            }
+        });
+    }
     // the backpack: a bag drawn by hand, with the count of things not looked at yet (not while a window is open)
     egui::Area::new(egui::Id::unique("bag")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-82.0, 18.0)).enabled(hud.panel.is_none()).show(ctx, |ui| {
         let r = ui.add(egui::Button::new("").min_size(egui::vec2(52.0, 52.0)).corner_radius(26.0));
@@ -562,6 +589,8 @@ enum Action {
     OpenBag,
     /// an item picked in the backpack
     Item(usize),
+    /// «вглядеться» (the eye button)
+    Eye,
     Resume,
     Settings,
     Back,
@@ -600,7 +629,9 @@ pub struct App {
     ui_mouse: bool,
     mouse: Option<(f64, f64)>,
     mouse_down: bool,
-    keys: [bool; 7],
+    keys: [bool; 8],
+    /// «вглядеться» pressed since the last frame (R or the eye button): one toggle, as the web's eyeTap
+    eye_tap: bool,
     last: Instant,
     start: Instant,
     next_frame: Instant,
@@ -679,7 +710,8 @@ impl App {
             ui_mouse: false,
             mouse: None,
             mouse_down: false,
-            keys: [false; 7],
+            keys: [false; 8],
+            eye_tap: false,
             last: Instant::now(),
             start: Instant::now(),
             next_frame: Instant::now(),
@@ -842,6 +874,7 @@ impl App {
                 }
                 self.story_events();
             }
+            Action::Eye => self.eye_tap = true,
             Action::OpenBag => {
                 if let Some(sc) = &self.script {
                     self.hud.items = sc.inventory();
@@ -969,6 +1002,8 @@ impl App {
                 }
                 E::Inventory => self.hud.items = sc.inventory(),
                 E::Menu => self.screen = Screen::Menu,
+                // the mind gave out: the collapse back to the road is not ported yet (the hero stays where he is)
+                E::Collapse => log::warn!("stability 0: the collapse to the road is not ported yet"),
             }
         }
     }
@@ -1400,6 +1435,10 @@ impl ApplicationHandler for App {
                         self.act(Action::Use, el);
                         return;
                     }
+                    PhysicalKey::Code(KeyCode::KeyR) if event.state == ElementState::Pressed && self.screen == Screen::Playing => {
+                        self.eye_tap = true;
+                        return;
+                    }
                     PhysicalKey::Code(KeyCode::KeyI) if event.state == ElementState::Pressed && self.screen == Screen::Playing => {
                         self.act(Action::OpenBag, el);
                         return;
@@ -1428,6 +1467,24 @@ impl App {
         let (fw, st) = (k(0) - k(1), k(3) - k(2));
         let ppp = self.ui.as_ref().map_or(1.0, |u| u.ppp);
         let mut joy_vis = None;
+        // the story's world first (the script's Duality: the wave, «вглядеться», the stability): the hero moves in the
+        // world it stands in, and the frame shows the same worlds
+        let eye = std::mem::take(&mut self.eye_tap);
+        if let (true, None, Some(sc), Some(h)) = (playing, &self.hud.panel, &self.script, &self.hero) {
+            let p = &h.player;
+            let (c, t) = (glam::Vec3::from(p.cam_pos), glam::Vec3::from(p.cam_target));
+            sc.tick(dt, p.pos, p.yaw, p.cam_pos, (t - c).normalize_or(glam::Vec3::Z).to_array(), eye);
+        }
+        if let Some(sc) = &self.script {
+            let ws = sc.world();
+            self.hud.eye = ws.eye_available.then_some(ws.peering);
+            if let Some(h) = &mut self.hero {
+                h.player.night = ws.night;
+            }
+            if let Some(w) = &mut self.world {
+                w.set_world(&world_frame(&ws));
+            }
+        }
         if let Some(h) = &mut self.hero {
             if matches!(self.screen, Screen::Playing | Screen::Paused | Screen::Bag) {
                 let mut mv = [st, fw];
@@ -1460,11 +1517,6 @@ impl App {
                 }
                 w.set_dynamic(&g.queue, &h.words);
             }
-        }
-        if let (true, None, Some(sc), Some(h)) = (playing, &self.hud.panel, &self.script, &self.hero) {
-            let p = &h.player;
-            let (c, t) = (glam::Vec3::from(p.cam_pos), glam::Vec3::from(p.cam_target));
-            sc.tick(dt, p.pos, p.yaw, p.cam_pos, (t - c).normalize_or(glam::Vec3::Z).to_array());
         }
         self.story_events();
         if self.hud.say.as_ref().is_some_and(|s| s.2 < self.start.elapsed().as_secs_f32()) {

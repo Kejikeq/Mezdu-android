@@ -55,12 +55,74 @@ struct Draw {
     cx: f32,
     cz: f32,
     base: u32,
+    /// quads per group: dream-only, both, night-only, leaves x3 (dream, both, night) — the mesher's c0
+    c0: [u32; 6],
+    /// the solid quads (all worlds) and the leaves (all worlds): the most any world draws
     opaque: u32,
     leaves: u32,
     leaf_base: u32,
     /// first quad and quad count of the water of this macro-chunk (drawn non-indexed: 6 vertices per quad)
     water_base: u32,
     water: u32,
+}
+
+impl Draw {
+    fn new(mm: &MacroMesh, base: u32, cx: f32, cz: f32, active: bool) -> Self {
+        let c0 = mm.c0;
+        Draw {
+            mcx: mm.mcx,
+            mcz: mm.mcz,
+            active,
+            cx,
+            cz,
+            base,
+            c0,
+            opaque: c0[0] + c0[1] + c0[2],
+            leaves: c0[3] + c0[4] + c0[5],
+            leaf_base: base + c0[0] + c0[1] + c0[2],
+            water_base: base + (mm.faces.len() / 3) as u32,
+            water: (mm.water.len() / 3) as u32,
+        }
+    }
+
+    /// The solid quads the world `cull` shows (1 dream, 2 nightmare, 3 both): first quad offset and count from `base`.
+    fn solid_range(&self, cull: u32) -> (u32, u32) {
+        let [d, b, n, ..] = self.c0;
+        match cull {
+            1 => (0, d + b),
+            2 => (d, b + n),
+            _ => (0, d + b + n),
+        }
+    }
+
+    /// The leaves the world shows: first offset from `leaf_base` and count.
+    fn leaf_range(&self, cull: u32) -> (u32, u32) {
+        let [_, _, _, ld, lb, ln] = self.c0;
+        match cull {
+            1 => (0, ld + lb),
+            2 => (ld, lb + ln),
+            _ => (0, ld + lb + ln),
+        }
+    }
+}
+
+/// What the scene needs of the world each frame (the story's Duality, see the script crate): the transition wave
+/// (a sphere whose inside shows the target world, plus the outer front of a reversed one) and the worlds of the chunks.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WorldFrame {
+    /// 0 dream .. 1 nightmare, eased
+    pub night_share: f32,
+    pub wave_c: [f32; 3],
+    pub wave_r: f32,
+    /// world ids 0 dream, 1 nightmare
+    pub wave_from: u8,
+    pub wave_to: u8,
+    pub wave_active: bool,
+    pub base: u8,
+    pub wave2_c: [f32; 3],
+    pub wave2_r: f32,
+    /// which worlds the chunks show: 1 dream, 2 nightmare, 3 both (per pixel)
+    pub cull: u32,
 }
 
 #[derive(Default)]
@@ -74,6 +136,13 @@ struct Cascade {
 }
 
 pub struct World {
+    /// the worlds the chunks show now (1 dream, 2 nightmare, 3 both), see WorldFrame
+    cull: u32,
+    /// the same at the last frame: a change re-draws the shadows
+    cull_last: u32,
+    /// exposure of the dream and of the nightmare of this chapter (the scene blends them by the night share)
+    exp_d: f32,
+    exp_n: f32,
     frame: Vec<f32>,
     frame_c1: Vec<f32>,
     pf: PerFrame,
@@ -357,20 +426,7 @@ impl World {
         for f in m.of_kind("mesh") {
             for mm in MacroMesh::parse_tile(&pack.read_data(&f.path)?)? {
                 let base = (fw.len() / 3) as u32;
-                let water_base = base + (mm.faces.len() / 3) as u32;
-                draws.push(Draw {
-                    mcx: mm.mcx,
-                    mcz: mm.mcz,
-                    active: true,
-                    cx: (mm.mcx * 64 + 32) as f32 * c.VS,
-                    cz: (mm.mcz * 64 + 32) as f32 * c.VS,
-                    base,
-                    opaque: mm.c0[0] + mm.c0[1],
-                    leaves: mm.c0[3] + mm.c0[4],
-                    leaf_base: base + mm.c0[0] + mm.c0[1] + mm.c0[2],
-                    water_base,
-                    water: (mm.water.len() / 3) as u32,
-                });
+                draws.push(Draw::new(&mm, base, (mm.mcx * 64 + 32) as f32 * c.VS, (mm.mcz * 64 + 32) as f32 * c.VS, true));
                 fw.extend_from_slice(&mm.faces);
                 fw.extend_from_slice(&mm.water);
             }
@@ -389,19 +445,7 @@ impl World {
                 closed.push(k);
                 let base = (fw.len() / 3) as u32;
                 opened.push(draws.len());
-                draws.push(Draw {
-                    mcx: mm.mcx,
-                    mcz: mm.mcz,
-                    active: false,
-                    cx: draws[k].cx,
-                    cz: draws[k].cz,
-                    base,
-                    opaque: mm.c0[0] + mm.c0[1],
-                    leaves: mm.c0[3] + mm.c0[4],
-                    leaf_base: base + mm.c0[0] + mm.c0[1] + mm.c0[2],
-                    water_base: base + (mm.faces.len() / 3) as u32,
-                    water: (mm.water.len() / 3) as u32,
-                });
+                draws.push(Draw::new(&mm, base, draws[k].cx, draws[k].cz, false));
                 fw.extend_from_slice(&mm.faces);
                 fw.extend_from_slice(&mm.water);
             }
@@ -482,7 +526,8 @@ impl World {
         let l0 = &res0.l0;
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layT"), bind_group_layouts: &[Some(l0), Some(&l1)], immediate_size: 0 });
         let lay_p = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("layP"), bind_group_layouts: &[Some(l0), Some(&l1p)], immediate_size: 0 });
-        let consts: &[(&str, f64)] = &[("WMODE", 0.0)];
+        // WMODE 2: the world of each pixel from the frame's transition wave (the dream when no wave runs)
+        let consts: &[(&str, f64)] = &[("WMODE", 2.0)];
         let opts = || wgpu::PipelineCompilationOptions { constants: consts, ..Default::default() };
         let pipe_l = |layout: &wgpu::PipelineLayout, label: &str, vs: &str, fs: Option<&str>, cull: Option<wgpu::Face>, shadow: bool| {
             let targets = [Some(HDR.into()), Some(GBUF.into())];
@@ -579,7 +624,13 @@ impl World {
         };
         let water_quads: u32 = draws.iter().map(|d| d.water).sum();
         log::info!("world: {} macro chunks, {} quads, {} water quads, exposure {:.2}", draws.len(), quads, water_quads, frame[132]);
+        let exp_d = frame[132];
+        let exp_n = m.night_exposure.get(&chapter.to_string()).copied().unwrap_or(exp_d);
         Ok(World {
+            cull: 1,
+            cull_last: 1,
+            exp_d,
+            exp_n,
             frame_c1: frame.clone(),
             frame,
             pf,
@@ -743,6 +794,23 @@ impl World {
         true
     }
 
+    /// The worlds of this frame (the story's Duality): the wave, the night share, which world the chunks show. The
+    /// scene's blends follow: the sky and the light by the night share, the exposure and the grain likewise, the
+    /// shaders pick each pixel's world from the wave.
+    pub fn set_world(&mut self, w: &WorldFrame) {
+        let ns = w.night_share.clamp(0.0, 1.0);
+        let f = &mut self.frame;
+        f[63] = ns; // nightGlobal
+        f[100..104].copy_from_slice(&[w.wave_c[0], w.wave_c[1], w.wave_c[2], w.wave_r]);
+        f[104..108].copy_from_slice(&[w.wave_from as f32, w.wave_to as f32, if w.wave_active { 1.0 } else { 0.0 }, w.base as f32]);
+        // the outer front of a reversed wave (radius 0 = none), as renderer.js: wave2.w is 0 when no wave runs
+        f[264..268].copy_from_slice(&[w.wave2_c[0], w.wave2_c[1], w.wave2_c[2], if w.wave_active { w.wave2_r } else { 0.0 }]);
+        f[132] = self.exp_d + (self.exp_n - self.exp_d) * ns; // exposure (main.js)
+        f[133] = 0.2 + ns * 0.25; // vignette
+        f[135] = 0.03 + ns * 0.01; // grain
+        self.cull = w.cull.clamp(1, 3);
+    }
+
     /// a story prop moved (see Props::move_to)
     pub fn move_prop(&mut self, q: &wgpu::Queue, model: &str, home: [f32; 3], to: [f32; 3], yaw: f32) -> usize {
         self.props.as_mut().map_or(0, |p| p.move_to(q, model, home, to, yaw))
@@ -790,7 +858,10 @@ impl World {
         // cascades follow the hero, a little ahead in the view direction
         let fwd = glam::Vec3::new(cam.yaw.sin(), 0.0, -cam.yaw.cos());
         let sun = [self.frame[60], self.frame[61], self.frame[62]];
-        let redo = [self.update_cascade(0, focus + fwd * (NEAR_EXT * 0.3), sun, NEAR_EXT), self.update_cascade(1, focus + fwd * (FAR_EXT * 0.3), sun, FAR_EXT)];
+        // shadows: from the moved hero as before, and afresh while a wave runs or the worlds changed (their casters differ)
+        let force = self.cull == 3 || self.cull != self.cull_last;
+        self.cull_last = self.cull;
+        let redo = [self.update_cascade(0, focus + fwd * (NEAR_EXT * 0.3), sun, NEAR_EXT) || force, self.update_cascade(1, focus + fwd * (FAR_EXT * 0.3), sun, FAR_EXT) || force];
 
         let pf = self.pf;
         let f = &mut self.frame;
@@ -838,11 +909,11 @@ impl World {
             *v = dr.active && dist <= 180.0 && (dist <= 10.0 || inside);
         }
         if let Some(pr) = &mut self.props {
-            pr.cull(q, cam.pos.to_array(), &planes);
+            pr.cull(q, cam.pos.to_array(), &planes, self.cull);
             for (k, &again) in redo.iter().enumerate() {
                 if again {
                     let cs = &self.casc[k];
-                    pr.cull_shadow(q, k, cs.cx, cs.cz, if k == 1 { FAR_EXT } else { NEAR_EXT });
+                    pr.cull_shadow(q, k, cs.cx, cs.cz, if k == 1 { FAR_EXT } else { NEAR_EXT }, self.cull);
                 }
             }
             self.instances = pr.count.iter().sum();
@@ -872,16 +943,18 @@ impl World {
             p.set_pipeline(&self.p_shadow);
             for dr in &self.draws {
                 let dist = (dr.cx - cs.cx).abs().max((dr.cz - cs.cz).abs());
-                if dr.active && dist <= far && dr.opaque > 0 {
-                    p.draw_indexed(0..dr.opaque * 6, (dr.base * 4) as i32, 0..1);
+                let (start, n) = dr.solid_range(self.cull);
+                if dr.active && dist <= far && n > 0 {
+                    p.draw_indexed(0..n * 6, ((dr.base + start) * 4) as i32, 0..1);
                     self.calls += 1;
                 }
             }
             p.set_pipeline(&self.p_shadow_leaf);
             for dr in &self.draws {
                 let dist = (dr.cx - cs.cx).abs().max((dr.cz - cs.cz).abs());
-                if dr.active && dist <= leaf_r && dr.leaves > 0 {
-                    p.draw_indexed(0..dr.leaves * 6, (dr.leaf_base * 4) as i32, 0..1);
+                let (start, n) = dr.leaf_range(self.cull);
+                if dr.active && dist <= leaf_r && n > 0 {
+                    p.draw_indexed(0..n * 6, ((dr.leaf_base + start) * 4) as i32, 0..1);
                     self.calls += 1;
                 }
             }
@@ -929,8 +1002,9 @@ impl World {
             p.set_bind_group(1, &self.bg1, &[]);
             p.set_pipeline(&self.p_terrain);
             for (dr, _) in self.draws.iter().zip(&self.draw_vis).filter(|(_, v)| **v) {
-                if dr.opaque > 0 {
-                    p.draw_indexed(0..dr.opaque * 6, (dr.base * 4) as i32, 0..1);
+                let (start, n) = dr.solid_range(self.cull);
+                if n > 0 {
+                    p.draw_indexed(0..n * 6, ((dr.base + start) * 4) as i32, 0..1);
                     self.calls += 1;
                 }
             }
@@ -942,8 +1016,9 @@ impl World {
             }
             p.set_pipeline(&self.p_leaf);
             for (dr, _) in self.draws.iter().zip(&self.draw_vis).filter(|(_, v)| **v) {
-                if dr.leaves > 0 {
-                    p.draw_indexed(0..dr.leaves * 6, (dr.leaf_base * 4) as i32, 0..1);
+                let (start, n) = dr.leaf_range(self.cull);
+                if n > 0 {
+                    p.draw_indexed(0..n * 6, ((dr.leaf_base + start) * 4) as i32, 0..1);
                     self.calls += 1;
                 }
             }
