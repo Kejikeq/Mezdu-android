@@ -45,3 +45,53 @@ pub unsafe fn open(vm: *mut c_void, activity: *mut c_void, url: &str) -> Result<
         Ok(())
     }
 }
+
+/// Starts the app again in a new process: the downloaded game library takes over right away (the launcher picks
+/// it at start). The restart intent of the launch activity (Intent.makeRestartActivityTask) goes to the system,
+/// then this process ends before the system can hand the new activity to it.
+///
+/// # Safety
+/// as `open`
+pub unsafe fn restart(vm: *mut c_void, activity: *mut c_void) -> Result<(), String> {
+    unsafe {
+        let vm = vm as *mut JavaVM;
+        let mut env: *mut JNIEnv = std::ptr::null_mut();
+        let attach = (**vm).AttachCurrentThread.ok_or("AttachCurrentThread")?;
+        if attach(vm, &mut env as *mut *mut JNIEnv as *mut *mut c_void, std::ptr::null_mut()) != JNI_OK {
+            return Err("attach".into());
+        }
+        let f = &**env;
+        let c = |s: &str| CString::new(s).unwrap_or_default();
+        macro_rules! call {
+            ($name:ident $(, $a:expr)*) => {
+                (f.$name.ok_or(stringify!($name))?)(env $(, $a)*)
+            };
+        }
+        macro_rules! method {
+            ($obj:expr, $name:expr, $sig:expr) => {{
+                let cls = call!(GetObjectClass, $obj);
+                let (n, s) = (c($name), c($sig));
+                call!(GetMethodID, cls, n.as_ptr(), s.as_ptr())
+            }};
+        }
+        let activity = activity as jobject;
+        let pm = call!(CallObjectMethodA, activity, method!(activity, "getPackageManager", "()Landroid/content/pm/PackageManager;"), std::ptr::null());
+        let pkg = call!(CallObjectMethodA, activity, method!(activity, "getPackageName", "()Ljava/lang/String;"), std::ptr::null());
+        let launch = call!(CallObjectMethodA, pm, method!(pm, "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;"), [jvalue { l: pkg }].as_ptr());
+        if launch.is_null() {
+            return Err("no launch intent".into());
+        }
+        let comp = call!(CallObjectMethodA, launch, method!(launch, "getComponent", "()Landroid/content/ComponentName;"), std::ptr::null());
+        let (ic, mk, sig) = (c("android/content/Intent"), c("makeRestartActivityTask"), c("(Landroid/content/ComponentName;)Landroid/content/Intent;"));
+        let intent_cls = call!(FindClass, ic.as_ptr());
+        let mk = call!(GetStaticMethodID, intent_cls, mk.as_ptr(), sig.as_ptr());
+        let intent = call!(CallStaticObjectMethodA, intent_cls, mk, [jvalue { l: comp }].as_ptr());
+        call!(CallVoidMethodA, activity, method!(activity, "startActivity", "(Landroid/content/Intent;)V"), [jvalue { l: intent }].as_ptr());
+        if call!(ExceptionCheck) != 0 {
+            call!(ExceptionClear);
+            return Err("restart threw".into());
+        }
+        log::info!("restarting for the new game library");
+        std::process::exit(0);
+    }
+}

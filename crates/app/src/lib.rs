@@ -64,6 +64,9 @@ struct Loaded {
     world: World,
 }
 
+/// what the loader returns when a new game library is ready: the app restarts into it
+const RESTART: &str = "restart";
+
 /// The loader thread: updates, integrity, shaders, world. Nothing in it touches the window.
 fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st: Arc<Mutex<LoadState>>) -> Result<Loaded, String> {
     let set = |stage: usize, frac: f32| {
@@ -103,7 +106,19 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
             set(0, done as f32 / total.max(1) as f32);
             note(0, format!("программа: {} из {}", mb(done), mb(total)));
         }) {
-            Ok(mezdu_updater::CodeOutcome::Staged { build, .. }) => note(0, format!("{prev}; программа {build} скачана, заработает при следующем запуске")),
+            Ok(mezdu_updater::CodeOutcome::Staged { build, .. }) => {
+                // the new library takes over at once: the app starts again (once per build — if the launcher fell
+                // back to the bundled one, this build stays for the next start instead of a restart loop)
+                let mark = data_dir.join("code").join("restart.txt");
+                if std::fs::read_to_string(&mark).map(|b| b.trim() != build).unwrap_or(true) {
+                    let _ = std::fs::write(&mark, &build);
+                    set(0, 1.0);
+                    note(0, format!("программа {build} установлена, перезапуск…"));
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    return Err(RESTART.into());
+                }
+                note(0, format!("{prev}; программа {build} заработает при следующем запуске"));
+            }
             Ok(mezdu_updater::CodeOutcome::NeedApk { build }) => note(0, format!("{prev}; программа {build} требует установить новый APK")),
             Ok(mezdu_updater::CodeOutcome::UpToDate) => note(0, prev),
             Err(e) => {
@@ -510,6 +525,17 @@ impl App {
                     // this library started and built the world: the launcher keeps it (crates/launcher)
                     let _ = std::fs::remove_file(self.data_dir.join("code").join("booting"));
                 }
+            }
+            Err(e) if e == RESTART => {
+                #[cfg(target_os = "android")]
+                if let Some(app) = ANDROID.get() {
+                    // SAFETY: pointers of the running activity, valid while the app runs
+                    if let Err(e) = unsafe { url::restart(app.vm_as_ptr(), app.activity_as_ptr()) } {
+                        log::error!("restart: {e}");
+                    }
+                }
+                // no restart (desktop, or it failed): the old library goes on, the new one starts next time
+                self.start_loading();
             }
             Err(e) => {
                 log::error!("loading: {e}");
