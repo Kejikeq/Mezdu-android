@@ -36,6 +36,8 @@ pub struct Player {
     look_idle: f32,
     tgt: [f32; 3],
     dir: [f32; 3],
+    /// the story's boxes (a closed door...) as duality.js hitsPropCollider sees them: min x y z, max x y z
+    pub colliders: Vec<[f32; 6]>,
 }
 
 fn angle_lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -69,6 +71,7 @@ impl Player {
             look_idle: 0.0,
             tgt: [0.0; 3],
             dir: [0.0; 3],
+            colliders: Vec::new(),
         }
     }
 
@@ -112,7 +115,8 @@ impl Player {
                 }
             }
         }
-        false
+        let b = [x - HW, y + 0.01, z - HW, x + HW, y + HEIGHT, z + HW];
+        self.colliders.iter().any(|c| b[3] > c[0] && b[0] < c[3] && b[4] > c[1] && b[1] < c[4] && b[5] > c[2] && b[2] < c[5])
     }
 
     fn try_move(&mut self, dx: f32, dz: f32, w: &Voxels) -> bool {

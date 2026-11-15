@@ -26,14 +26,20 @@ let scoreInteractable = null;
 
 class Prop {
   constructor(model, x, y, z, yaw, o) {
+    // home: where the native side finds this prop's instance, also after it moved
+    this.home = [x, y, z];
     Object.assign(this, { model, x, y, z, yaw, pitch: o.pitch || 0, roll: o.roll || 0, s: o.scale || 1, mask: o.mask ?? 3, vis: o.visible !== false, hl: false });
     if (!this.vis) this._send();
   }
-  _send() { emit({ t: 'prop', model: this.model, p: [this.x, this.y, this.z], on: this.vis }); }
+  _send() { emit({ t: 'prop', model: this.model, p: this.home, on: this.vis }); }
   show(v) { this.vis = !!v; this._send(); return this; }
-  setModel(m) { if (m !== this.model) { emit({ t: 'prop', model: this.model, p: [this.x, this.y, this.z], on: false }); this.model = m; this._send(); } return this; }
+  setModel(m) { if (m !== this.model) { emit({ t: 'prop', model: this.model, p: this.home, on: false }); this.model = m; this._send(); } return this; }
   highlight() { return this; }
-  move(x, y, z, yaw) { Object.assign(this, { x, y, z, yaw: yaw ?? this.yaw }); return this; }
+  move(x, y, z, yaw) {
+    Object.assign(this, { x, y, z, yaw: yaw ?? this.yaw });
+    emit({ t: 'move', model: this.model, p: this.home, to: [x, y, z], yaw: this.yaw });
+    return this;
+  }
 }
 
 const say = (text, dur = 4, who) => { if (text) emit({ t: 'say', text: String(text), dur, who: who || '' }); };
@@ -67,6 +73,26 @@ const memoryBoard = quiet({
   refreshBadge() {},
 });
 
+// G.world.addCollider (duality.js): story boxes the hero cannot walk through while their mask has the dream bit
+let nextCollider = 1;
+const colliders = [];
+const world = quiet({
+  addCollider(box) {
+    const c = {
+      id: nextCollider++,
+      x0: Math.min(box.x0, box.x1), y0: Math.min(box.y0, box.y1), z0: Math.min(box.z0, box.z1),
+      x1: Math.max(box.x0, box.x1), y1: Math.max(box.y0, box.y1), z1: Math.max(box.z0, box.z1),
+      tag: box.tag || '', _mask: box.mask ?? 3,
+    };
+    const send = () => emit({ t: 'collider', id: c.id, box: [c.x0, c.y0, c.z0, c.x1, c.y1, c.z1], on: (c._mask & 1) !== 0 });
+    Object.defineProperty(c, 'mask', { get: () => c._mask, set: (v) => { if (v !== c._mask) { c._mask = v; send(); } } });
+    colliders.push([c, send]);
+    send();
+    return c;
+  },
+  clearColliders() { for (const [c] of colliders) c.mask = 0; },
+});
+
 const EDITS = { ch1Door: false, ch2Door: false, ch3Door: false, ch4Door: false, startCave: false, bridge1: false, door: false, hedge1: false, hedge2: false, grate: false, tunnelWall: false, hearth: false };
 
 const G = quiet({
@@ -85,7 +111,7 @@ const G = quiet({
   deer: actor(), rabbit: actor(), mike: actor(), shadow: actor(),
   models: new Proxy({}, { get: (t, k) => (typeof k === 'string' && k !== 'then' ? k : undefined) }),
   ui, memoryBoard,
-  audio: stub, emit: stub, world: stub, figures: quiet({ list: [], add: () => stub, clear() {} }),
+  audio: stub, emit: stub, world, figures: quiet({ list: [], add: () => stub, clear() {} }),
   streamer: quiet({ loadChapter: () => Promise.resolve(), burst() {} }),
 
   interact(o) { const it = Object.assign({ r: 2.2, world: 'any', icon: 'hand', label: 'Осмотреть' }, o); this.interactables.push(it); return it; },
@@ -130,7 +156,10 @@ const G = quiet({
   placeSafe(x, y, z, yaw) { this.player.place(x, y ?? this.groundAt(x, z), z, yaw); },
   groundAt(x, z) { return H.ground(x, z); },
   groundBelow(x, y, z) { return H.ground(x, z); },
-  setEdit(name, on) { this.edits[name] = !!on; return Promise.resolve(); },
+  setEdit(name, on) {
+    if (!!this.edits[name] !== !!on) { this.edits[name] = !!on; emit({ t: 'edit', name, on: !!on }); }
+    return Promise.resolve();
+  },
   checkpoint() { this.cp = { pos: this.player.pos.slice(), yaw: this.player.yaw }; },
   enterMenu() { emit({ t: 'menu' }); },
   resetRun() {
@@ -169,7 +198,12 @@ globalThis.__boot = async (mods) => {
 };
 
 /** a new game: chapter 1 from its start */
-globalThis.__newGame = async () => { G.resetRun(); await G.story.restore(); };
+// every edit as the story has it now (after a new game or a load the native world may be in any state)
+const syncEdits = () => {
+  for (const [name, on] of Object.entries(G.edits)) emit({ t: 'edit', name, on: !!on });
+  for (const [, send] of colliders) send();
+};
+globalThis.__newGame = async () => { G.resetRun(); await G.story.restore(); syncEdits(); };
 
 /** every frame, first the camera (position, forward vector), then the hero (feet, facing) */
 const camFwd = [0, 0, 1];
@@ -225,5 +259,6 @@ globalThis.__restore = async (json) => {
   G.inv = (d.inv || []).filter((i) => ITEMS[i.id]).map((i) => ({ id: i.id, seen: !!i.seen }));
   memoryBoard.deserialize(d.memoryBoard);
   await G.story.restore();
+  syncEdits();
   G.refreshTools();
 };

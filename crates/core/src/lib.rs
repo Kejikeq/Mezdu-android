@@ -246,3 +246,27 @@ pub fn u32s(bytes: &[u8]) -> Vec<u32> {
 pub fn parse_models(json: &[u8]) -> Result<Vec<ModelMeta>, String> {
     serde_json::from_slice(json).map_err(|e| format!("models.json: {e}"))
 }
+
+/// A world edit of the game (worldgen.js EDIT_BOXES: a door, a rockfall, a bridge...): its voxel box closed (as the
+/// world tiles have it) and opened. From `edit/<name>.vox.zst`; the opened meshes are `edit/<name>.mesh.zst`.
+#[derive(Debug, Clone)]
+pub struct EditBox {
+    pub origin: [i32; 3],
+    pub size: [i32; 3],
+    /// index x + sx * (z + sz * y)
+    pub closed: Vec<u16>,
+    pub opened: Vec<u16>,
+}
+
+impl EditBox {
+    pub fn parse(b: &[u8]) -> Result<Self, String> {
+        let w = |i: usize| b.get(i * 4..i * 4 + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as i32).ok_or("edit: short header");
+        let (origin, size) = ([w(0)?, w(1)?, w(2)?], [w(3)?, w(4)?, w(5)?]);
+        let n = (size[0] * size[1] * size[2]) as usize;
+        if b.len() < 24 + n * 4 {
+            return Err("edit: short box".into());
+        }
+        let half = |o: usize| (0..n).map(|i| u16::from_le_bytes([b[o + i * 2], b[o + i * 2 + 1]])).collect::<Vec<u16>>();
+        Ok(EditBox { origin, size, closed: half(24), opened: half(24 + n * 2) })
+    }
+}

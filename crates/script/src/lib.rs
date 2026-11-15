@@ -31,6 +31,12 @@ pub enum Event {
     /// a story prop shown or hidden (model name, position)
     Prop { model: String, pos: [f32; 3], on: bool },
     Teleport { pos: [f32; 3], yaw: f32 },
+    /// a story prop moved and turned (a door on its hinge): found by where it was placed (`home`)
+    Move { model: String, home: [f32; 3], to: [f32; 3], yaw: f32 },
+    /// a story box the hero cannot walk through while `on` (min x y z, max x y z)
+    Collider { id: u32, aabb: [f32; 6], on: bool },
+    /// a world edit (worldgen.js EDIT_BOXES) opened or closed
+    Edit { name: String, on: bool },
     /// the backpack changed
     Inventory,
     Menu,
@@ -240,6 +246,12 @@ fn event(e: &serde_json::Value) -> Option<Event> {
         },
         "prop" => Event::Prop { model: s("model"), pos: p("p"), on: e["on"].as_bool().unwrap_or(true) },
         "teleport" => Event::Teleport { pos: p("p"), yaw: f("yaw") },
+        "move" => Event::Move { model: s("model"), home: p("p"), to: p("to"), yaw: f("yaw") },
+        "collider" => {
+            let b = &e["box"];
+            Event::Collider { id, aabb: [0, 1, 2, 3, 4, 5].map(|i| b[i].as_f64().unwrap_or(0.0) as f32), on: e["on"].as_bool().unwrap_or(true) }
+        }
+        "edit" => Event::Edit { name: s("name"), on: e["on"].as_bool().unwrap_or(false) },
         "inv" => Event::Inventory,
         "menu" => Event::Menu,
         _ => return None,

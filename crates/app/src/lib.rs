@@ -34,7 +34,8 @@ type Joystick = (u64, (f64, f64), (f64, f64));
 
 /// the hero walking the voxel world (player.js) with the rig drawn by the renderer
 struct Hero {
-    vox: Rc<Voxels>,
+    /// shared with the story scripts (they ask about walls); the story's world edits write into it
+    vox: Rc<std::cell::RefCell<Voxels>>,
     player: Player,
     rig: Option<RigModels>,
     words: Vec<u32>,
@@ -44,13 +45,13 @@ struct Hero {
 }
 
 /// The voxels as the story scripts ask about them (mezdu_script::World).
-struct VoxWorld(Rc<Voxels>);
+struct VoxWorld(Rc<std::cell::RefCell<Voxels>>);
 impl mezdu_script::World for VoxWorld {
     fn solid(&self, x: i32, y: i32, z: i32) -> bool {
-        self.0.solid(x, y, z)
+        self.0.borrow().solid(x, y, z)
     }
     fn ground(&self, x: f32, z: f32) -> f32 {
-        let v = &self.0;
+        let v = self.0.borrow();
         let (ix, iz) = ((x / v.vs).floor() as i32, (z / v.vs).floor() as i32);
         (1..v.wy).rev().find(|&y| v.solid(ix, y - 1, iz)).map_or(0.0, |y| y as f32 * v.vs)
     }
@@ -75,6 +76,8 @@ struct Hud {
     /// the backpack as the scripts keep it, and the item looked at
     items: Vec<mezdu_script::Item>,
     sel: usize,
+    /// the story's colliders by id: box and whether it blocks
+    colliders: HashMap<u32, ([f32; 6], bool)>,
 }
 
 /// megabytes with one decimal, as the loading screen shows them ("9,8 МБ")
@@ -646,7 +649,7 @@ impl App {
         let hero = pack.as_ref().and_then(|p| match Voxels::load(p) {
             Ok(vox) => {
                 let player = Player::new(&vox);
-                Some(Hero { vox: Rc::new(vox), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] })
+                Some(Hero { vox: Rc::new(std::cell::RefCell::new(vox)), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] })
             }
             Err(e) => {
                 log::warn!("no voxels: {e}");
@@ -731,10 +734,10 @@ impl App {
             Ok(l) => {
                 log::info!("loaded: pack {} · quality {:?}", &l.pack.manifest.commit[..7.min(l.pack.manifest.commit.len())], l.world.quality);
                 match (&mut self.hero, l.vox) {
-                    (Some(h), Some(v)) => h.vox = Rc::new(v),
+                    (Some(h), Some(v)) => h.vox = Rc::new(std::cell::RefCell::new(v)),
                     (None, Some(vox)) => {
                         let player = Player::new(&vox);
-                        self.hero = Some(Hero { vox: Rc::new(vox), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] });
+                        self.hero = Some(Hero { vox: Rc::new(std::cell::RefCell::new(vox)), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] });
                     }
                     _ => {}
                 }
@@ -780,7 +783,7 @@ impl App {
                         Some((x.parse::<f32>().ok()?, z.parse::<f32>().ok()?))
                     });
                     let (x, z) = at.unwrap_or((SPAWN[0], SPAWN[2]));
-                    h.player.spawn(&h.vox, x, z, SPAWN[1], SPAWN[3]);
+                    h.player.spawn(&h.vox.borrow(), x, z, SPAWN[1], SPAWN[3]);
                     log::info!("new game: hero at {:.2?}", h.player.pos);
                     self.screen = Screen::Playing;
                     self.playtime = 0.0;
@@ -944,6 +947,26 @@ impl App {
                         h.player.place(pos[0], pos[1], pos[2], yaw);
                     }
                 }
+                E::Move { model, home, to, yaw } => {
+                    if let (Some(w), Some(g)) = (&mut self.world, &self.gfx) {
+                        w.move_prop(&g.queue, &model, home, to, yaw);
+                    }
+                }
+                E::Collider { id, aabb, on } => {
+                    self.hud.colliders.insert(id, (aabb, on));
+                    if let Some(h) = &mut self.hero {
+                        h.player.colliders.clear();
+                        h.player.colliders.extend(self.hud.colliders.values().filter(|c| c.1).map(|c| c.0));
+                    }
+                }
+                E::Edit { name, on } => {
+                    if let (Some(w), Some(p)) = (&mut self.world, &self.pack) {
+                        w.set_edit(&name, on);
+                        if let (Some(h), Ok(e)) = (&self.hero, p.read_data(&format!("edit/{name}.vox.zst")).and_then(|b| mezdu_core::EditBox::parse(&b))) {
+                            h.vox.borrow_mut().apply_edit(&e, on);
+                        }
+                    }
+                }
                 E::Inventory => self.hud.items = sc.inventory(),
                 E::Menu => self.screen = Screen::Menu,
             }
@@ -975,7 +998,7 @@ impl App {
             h.player.cam_pitch = s.cam_pitch;
             // the camera behind him at once (it follows smoothly, and a paused game would not move it)
             for _ in 0..30 {
-                h.player.update_camera(0.1, &Input::default(), &h.vox, false);
+                h.player.update_camera(0.1, &Input::default(), &h.vox.borrow(), false);
             }
             log::info!("save: hero at {:.2?}", s.pos);
         }
@@ -1421,8 +1444,8 @@ impl App {
                     self.playtime += dt as f64;
                     let inp = Input { mv, look: h.look, run: self.keys[6] };
                     h.look = [0.0; 2];
-                    h.player.update(dt, &inp, &h.vox);
-                    h.player.update_camera(dt, &inp, &h.vox, size.height > size.width);
+                    h.player.update(dt, &inp, &h.vox.borrow());
+                    h.player.update_camera(dt, &inp, &h.vox.borrow(), size.height > size.width);
                 }
                 let (p, t) = (glam::Vec3::from(h.player.cam_pos), glam::Vec3::from(h.player.cam_target));
                 let f = (t - p).normalize_or(glam::Vec3::NEG_Z);

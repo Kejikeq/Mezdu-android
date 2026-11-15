@@ -4,6 +4,7 @@
 //! The sky reflections are baked once with ENV_SHADER (fsEnv, fsLut). Bind group 0 mirrors renderer.js `L0`;
 //! still missing (neutral stand-ins): AO, SSR, volumetric light, DOF, TAA history, props, grass, water, particles.
 use crate::props::{frustum_planes, Props};
+use std::collections::HashMap;
 use mezdu_core::{f32s, MacroMesh, Pack, PerFrame};
 use wgpu::util::DeviceExt;
 
@@ -47,6 +48,10 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 "#;
 
 struct Draw {
+    mcx: u32,
+    mcz: u32,
+    /// drawn: false for the opened state of a world edit while it is closed, and for what it replaces while open
+    active: bool,
     cx: f32,
     cz: f32,
     base: u32,
@@ -111,6 +116,8 @@ pub struct World {
     comp_res: CompRes,
     targets: Option<Targets>,
     draws: Vec<Draw>,
+    /// world edit → (the world's macro chunks it replaces, its opened ones), indices into `draws`
+    edits: HashMap<String, (Vec<usize>, Vec<usize>)>,
     /// per draw: in view this frame (renderer.js visibleChunks: distance and frustum)
     draw_vis: Vec<bool>,
     pub quads: u32,
@@ -352,6 +359,9 @@ impl World {
                 let base = (fw.len() / 3) as u32;
                 let water_base = base + (mm.faces.len() / 3) as u32;
                 draws.push(Draw {
+                    mcx: mm.mcx,
+                    mcz: mm.mcz,
+                    active: true,
                     cx: (mm.mcx * 64 + 32) as f32 * c.VS,
                     cz: (mm.mcz * 64 + 32) as f32 * c.VS,
                     base,
@@ -367,6 +377,35 @@ impl World {
         }
         if fw.is_empty() {
             return Err("pack has no mesh".into());
+        }
+        // world edits: their opened macro chunks go in after the world's, inactive; the edit swaps them in
+        let mut edits = HashMap::new();
+        for f in m.of_kind("edit").filter(|f| f.path.ends_with(".mesh.zst")) {
+            let name = f.path.trim_start_matches("edit/").trim_end_matches(".mesh.zst").to_string();
+            let (mut closed, mut opened) = (Vec::new(), Vec::new());
+            for mm in MacroMesh::parse_tile(&pack.read_data(&f.path)?)? {
+                // only where the world itself has this macro chunk (the tiles of the pack)
+                let Some(k) = draws.iter().position(|d: &Draw| d.mcx == mm.mcx && d.mcz == mm.mcz) else { continue };
+                closed.push(k);
+                let base = (fw.len() / 3) as u32;
+                opened.push(draws.len());
+                draws.push(Draw {
+                    mcx: mm.mcx,
+                    mcz: mm.mcz,
+                    active: false,
+                    cx: draws[k].cx,
+                    cz: draws[k].cz,
+                    base,
+                    opaque: mm.c0[0] + mm.c0[1],
+                    leaves: mm.c0[3] + mm.c0[4],
+                    leaf_base: base + mm.c0[0] + mm.c0[1] + mm.c0[2],
+                    water_base: base + (mm.faces.len() / 3) as u32,
+                    water: (mm.water.len() / 3) as u32,
+                });
+                fw.extend_from_slice(&mm.faces);
+                fw.extend_from_slice(&mm.water);
+            }
+            edits.insert(name, (closed, opened));
         }
         let quads = (fw.len() / 3) as u32;
         let faces_buf = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("faces"), contents: &fw.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>(), usage: sb });
@@ -582,6 +621,7 @@ impl World {
             targets: None,
             draw_vis: vec![false; draws.len()],
             draws,
+            edits,
             quads,
             calls: 0,
             shadow_passes: 0,
@@ -689,6 +729,25 @@ impl World {
     }
 
     /// instances the game moves every frame (the hero's rig), see Props::set_dynamic
+    /// A world edit of the story opened or closed: its macro chunks swap meshes (the voxels are the caller's).
+    pub fn set_edit(&mut self, name: &str, on: bool) -> bool {
+        let Some((closed, opened)) = self.edits.get(name) else { return false };
+        for &k in closed {
+            self.draws[k].active = !on;
+        }
+        for &k in opened {
+            self.draws[k].active = on;
+        }
+        // the shadows see it at once
+        self.casc.iter_mut().for_each(|c| c.valid = false);
+        true
+    }
+
+    /// a story prop moved (see Props::move_to)
+    pub fn move_prop(&mut self, q: &wgpu::Queue, model: &str, home: [f32; 3], to: [f32; 3], yaw: f32) -> usize {
+        self.props.as_mut().map_or(0, |p| p.move_to(q, model, home, to, yaw))
+    }
+
     /// a story prop shown or hidden (see Props::set_visible)
     pub fn set_prop_visible(&mut self, q: &wgpu::Queue, model: &str, pos: [f32; 3], on: bool) -> usize {
         self.props.as_mut().map_or(0, |p| p.set_visible(q, model, pos, on))
@@ -776,7 +835,7 @@ impl World {
             let dz = ((dr.cz - cam.pos.z).abs() - hxz).max(0.0);
             let dist = dx.hypot(dz);
             let inside = planes.iter().all(|pl| pl[0] * dr.cx + pl[1] * 8.0 + pl[2] * dr.cz + pl[3] + pl[0].abs() * hxz + pl[1].abs() * hy + pl[2].abs() * hxz >= 0.0);
-            *v = dist <= 180.0 && (dist <= 10.0 || inside);
+            *v = dr.active && dist <= 180.0 && (dist <= 10.0 || inside);
         }
         if let Some(pr) = &mut self.props {
             pr.cull(q, cam.pos.to_array(), &planes);
@@ -813,7 +872,7 @@ impl World {
             p.set_pipeline(&self.p_shadow);
             for dr in &self.draws {
                 let dist = (dr.cx - cs.cx).abs().max((dr.cz - cs.cz).abs());
-                if dist <= far && dr.opaque > 0 {
+                if dr.active && dist <= far && dr.opaque > 0 {
                     p.draw_indexed(0..dr.opaque * 6, (dr.base * 4) as i32, 0..1);
                     self.calls += 1;
                 }
@@ -821,7 +880,7 @@ impl World {
             p.set_pipeline(&self.p_shadow_leaf);
             for dr in &self.draws {
                 let dist = (dr.cx - cs.cx).abs().max((dr.cz - cs.cz).abs());
-                if dist <= leaf_r && dr.leaves > 0 {
+                if dr.active && dist <= leaf_r && dr.leaves > 0 {
                     p.draw_indexed(0..dr.leaves * 6, (dr.leaf_base * 4) as i32, 0..1);
                     self.calls += 1;
                 }

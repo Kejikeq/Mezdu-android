@@ -52,6 +52,31 @@ impl Voxels {
         Some(t[(lx + self.tile * (lz + self.tile * y)) as usize])
     }
 
+    /// writes a voxel of a loaded tile (outside them nothing happens)
+    pub fn set(&mut self, x: i32, y: i32, z: i32, v: u16) {
+        if x < 0 || z < 0 || y < 0 || x >= self.wx || z >= self.wz || y >= self.wy {
+            return;
+        }
+        let (tile, tx) = (self.tile, self.tiles_x);
+        if let Some(t) = self.tiles[((x / tile) + tx * (z / tile)) as usize].as_mut() {
+            let (lx, lz) = (x % tile, z % tile);
+            t[(lx + tile * (lz + tile * y)) as usize] = v;
+        }
+    }
+
+    /// a world edit of the story (a door opened, a rockfall cleared...): the box in its opened or closed state
+    pub fn apply_edit(&mut self, e: &mezdu_core::EditBox, on: bool) {
+        let src = if on { &e.opened } else { &e.closed };
+        let [sx, sy, sz] = e.size;
+        for y in 0..sy {
+            for z in 0..sz {
+                for x in 0..sx {
+                    self.set(e.origin[0] + x, e.origin[1] + y, e.origin[2] + z, src[(x + sx * (z + sz * y)) as usize]);
+                }
+            }
+        }
+    }
+
     pub fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
         self.vox(x, y, z).map_or(0, |v| (v & 255) as u8) // the dream world
     }

@@ -14,6 +14,8 @@ pub struct Props {
     vis_base: Vec<u32>,
     /// each static instance's world mask as packed (a prop hidden at export: both worlds)
     mask0: Vec<u32>,
+    /// each static instance's place as packed: the story finds its props by it, also after moving them
+    home: Vec<[f32; 3]>,
     pub minfo: wgpu::Buffer,
     pub mfaces: wgpu::Buffer,
     pub insts: wgpu::Buffer,
@@ -80,9 +82,11 @@ impl Props {
         let others = (0..meta.len()).filter(|&i| !is_tree(&meta[i])).collect();
         let casters = (0..meta.len()).filter(|&i| meta[i].flags & 1 != 0).collect();
         log::info!("props: {} models, {} instances", meta.len(), n);
+        let home = (0..n).map(|i| [3, 7, 11].map(|k| f32::from_bits(inst[i * W + k]))).collect();
         let mask0 = (0..n).map(|i| if inst[i * W + 13] & 3 == 0 { inst[i * W + 13] | 3 } else { inst[i * W + 13] }).collect();
         Ok(Some(Props {
             mask0,
+            home,
             max_quads: meta.iter().map(|m| m.face_count).max().unwrap_or(1),
             radius,
             n,
@@ -116,17 +120,36 @@ impl Props {
 
     /// A story prop shown or hidden (G.place(...).show in the scripts): the static instances of `model` and its
     /// far versions (`_l`, `_f`) within 0.3 m of `pos`. Returns how many changed.
+    /// the static instances of `model` (and its `_l`, `_f`) packed within 0.3 m of `home`
+    fn story_prop(&self, model: &str, home: [f32; 3]) -> impl Iterator<Item = usize> + '_ {
+        let model = model.to_string();
+        (0..self.n).filter(move |&i| {
+            let name = &self.meta[self.inst[i * W + 12] as usize].name;
+            let p = self.home[i];
+            (name == &model || name.strip_suffix("_l").or(name.strip_suffix("_f")) == Some(model.as_str())) && (p[0] - home[0]).abs() <= 0.3 && (p[1] - home[1]).abs() <= 0.3 && (p[2] - home[2]).abs() <= 0.3
+        })
+    }
+
+    /// A story prop moved and turned about its vertical axis (a door on its hinge: StaticProp.move), scale kept.
+    pub fn move_to(&mut self, q: &wgpu::Queue, model: &str, home: [f32; 3], to: [f32; 3], yaw: f32) -> usize {
+        let found: Vec<usize> = self.story_prop(model, home).collect();
+        for &i in &found {
+            let (_, s) = self.pos(i);
+            let (c, sn) = (yaw.cos() * s, yaw.sin() * s);
+            // m34TRS (engine/math.js) with pitch = roll = 0
+            let m = [c, 0.0, sn, to[0], 0.0, s, 0.0, to[1], -sn, 0.0, c, to[2]];
+            for (k, v) in m.iter().enumerate() {
+                self.inst[i * W + k] = v.to_bits();
+            }
+            q.write_buffer(&self.insts, (i * W * 4) as u64, bytemuck_u32(&self.inst[i * W..i * W + 12]));
+        }
+        found.len()
+    }
+
     pub fn set_visible(&mut self, q: &wgpu::Queue, model: &str, pos: [f32; 3], on: bool) -> usize {
         let mut n = 0;
-        for i in 0..self.n {
-            let name = &self.meta[self.inst[i * W + 12] as usize].name;
-            if name != model && name.strip_suffix("_l").or(name.strip_suffix("_f")) != Some(model) {
-                continue;
-            }
-            let (p, _) = self.pos(i);
-            if (p[0] - pos[0]).abs() > 0.3 || (p[1] - pos[1]).abs() > 0.3 || (p[2] - pos[2]).abs() > 0.3 {
-                continue;
-            }
+        let found: Vec<usize> = self.story_prop(model, pos).collect();
+        for i in found {
             let want = if on { self.mask0[i] } else { 0 };
             if self.inst[i * W + 13] != want {
                 self.inst[i * W + 13] = want;
