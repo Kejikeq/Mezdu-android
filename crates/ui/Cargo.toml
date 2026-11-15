@@ -1,0 +1,11 @@
+[package]
+name = "mezdu-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# only the egui core (layout, text, tessellation): drawn by this crate's own wgpu pass, so its version is not tied
+# to the wgpu / winit versions of egui-wgpu / egui-winit
+egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
+wgpu.workspace = true
+log.workspace = true

@@ -12,10 +12,12 @@ name = "mezdu"
 path = "src/main.rs"
 
 [dependencies]
+jni-sys = "0.3"
 mezdu-core.workspace = true
 mezdu-gfx.workspace = true
 mezdu-game.workspace = true
 mezdu-updater.workspace = true
+mezdu-ui.workspace = true
 winit.workspace = true
 log.workspace = true
 glam.workspace = true

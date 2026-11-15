@@ -145,47 +145,38 @@ impl Gfx {
         w
     }
 
-    /// Scene frame: the world through the game's shaders, then present.
-    pub fn frame_world(&mut self, world: &mut world::World, cam: &world::Camera, focus: glam::Vec3, time: f32) {
+    /// One frame: the world through the game's shaders (or a plain colour without one), then `overlay` draws on top
+    /// (the interface), then present.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &mut self,
+        world: Option<&mut world::World>,
+        cam: &world::Camera,
+        focus: glam::Vec3,
+        time: f32,
+        sky: [f64; 3],
+        overlay: impl FnOnce(&wgpu::Device, &wgpu::Queue, &mut wgpu::CommandEncoder, &wgpu::TextureView, u32, u32),
+    ) {
         let Some(tex) = self.acquire() else { return };
         let view = tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        world.render(&self.device, &self.queue, &mut enc, &view, self.config.width, self.config.height, cam, focus, time);
-        self.queue.submit([enc.finish()]);
-        self.queue.present(tex);
-    }
-
-    /// Status frame: clear to a colour.
-    pub fn frame(&mut self, sky: [f64; 3]) {
-        let tex = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) => t,
-            wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
-                self.surface.configure(&self.device, &self.config);
-                t
+        let (w, h) = (self.config.width, self.config.height);
+        match world {
+            Some(wd) => wd.render(&self.device, &self.queue, &mut enc, &view, w, h, cam, focus, time),
+            None => {
+                enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: sky[0], g: sky[1], b: sky[2], a: 1.0 }), store: wgpu::StoreOp::Store },
+                    })],
+                    ..Default::default()
+                });
             }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                return;
-            }
-            _ => return, // timeout / occluded: skip the frame
-        };
-        let view = tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        {
-            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: sky[0], g: sky[1], b: sky[2], a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
         }
+        overlay(&self.device, &self.queue, &mut enc, &view, w, h);
         self.queue.submit([enc.finish()]);
         self.queue.present(tex);
     }
