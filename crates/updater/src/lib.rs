@@ -253,23 +253,24 @@ pub const PERIOD: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// For a background thread: checks now and then every PERIOD for as long as the game runs; `on_apk` gets the
 /// commit of a newer APK once.
-/// Set when this copy of the game library hands over to a newer one in the same process: its watch thread ends.
-pub static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// What a check found for the player to act on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Found {
+    /// a newer APK must be installed (its launcher is needed)
+    Apk(String),
+    /// a newer game library is downloaded: it starts with the next start of the app
+    Code(String),
+}
 
-pub fn watch(data_dir: PathBuf, build: &'static str, abi: Option<&'static str>, on_apk: impl Fn(String)) {
-    let mut told = false;
+pub fn watch(data_dir: PathBuf, build: &'static str, abi: Option<&'static str>, on: impl Fn(Found)) {
+    let mut told = None;
     loop {
         // the loading screen does the first check itself (update_now); this one starts a period later
-        for _ in 0..PERIOD.as_secs() {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if STOP.load(std::sync::atomic::Ordering::Relaxed) {
-                return;
-            }
-        }
-        if let Some(c) = run(data_dir.clone(), build, abi) {
-            if !told {
-                on_apk(c);
-                told = true;
+        std::thread::sleep(PERIOD);
+        if let Some(f) = run(data_dir.clone(), build, abi) {
+            if told.as_ref() != Some(&f) {
+                told = Some(f.clone());
+                on(f);
             }
         }
     }
@@ -277,7 +278,7 @@ pub fn watch(data_dir: PathBuf, build: &'static str, abi: Option<&'static str>, 
 
 /// One check: pack first, then the code: with an ABI the game library (a new APK only when its launcher is too
 /// old), without one the APK.
-pub fn run(data_dir: PathBuf, build: &'static str, abi: Option<&str>) -> Option<String> {
+pub fn run(data_dir: PathBuf, build: &'static str, abi: Option<&str>) -> Option<Found> {
     match check_pack(&data_dir) {
         Ok(Outcome::UpToDate) => log::info!("updater: pack is up to date"),
         Ok(Outcome::Staged { commit, downloaded, dropped }) => log::info!("updater: pack {commit} staged ({downloaded} files downloaded, {dropped} dropped), installed at the next loading"),
@@ -289,7 +290,8 @@ pub fn run(data_dir: PathBuf, build: &'static str, abi: Option<&str>) -> Option<
             return None;
         }
         return match check_code(&data_dir, abi, build, &|_, _| {}) {
-            Ok(CodeOutcome::NeedApk { build }) => Some(build),
+            Ok(CodeOutcome::NeedApk { build }) => Some(Found::Apk(build)),
+            Ok(CodeOutcome::Staged { build, .. }) => Some(Found::Code(build)),
             Ok(o) => {
                 log::info!("updater: code {o:?}");
                 None
@@ -303,7 +305,7 @@ pub fn run(data_dir: PathBuf, build: &'static str, abi: Option<&str>) -> Option<
     match newer_apk(build) {
         Ok(Some(c)) => {
             log::info!("updater: a newer APK ({c}) is available: {APK_URL}");
-            Some(c)
+            Some(Found::Apk(c))
         }
         Ok(None) => None,
         Err(e) => {
@@ -340,7 +342,12 @@ pub fn check_code(data_dir: &Path, abi: &str, running: &str, progress: &dyn Fn(u
     if installed < need {
         return Ok(CodeOutcome::NeedApk { build });
     }
-    if std::fs::read_to_string(code.join("build.txt")).map(|b| b.trim() == build).unwrap_or(false) && code.join("libmezdu.so").exists() {
+    let read = |f: &str| std::fs::read_to_string(code.join(f)).map(|b| b.trim().to_string()).unwrap_or_default();
+    // a build that did not start on this phone (the launcher wrote it down) is not downloaded again
+    if read("failed.txt") == build {
+        return Ok(CodeOutcome::UpToDate);
+    }
+    if read("build.txt") == build && code.join("libmezdu.so").exists() {
         return Ok(CodeOutcome::Staged { build, bytes: 0 });
     }
     std::fs::create_dir_all(&code).map_err(|e| e.to_string())?;
@@ -361,6 +368,16 @@ pub fn check_code(data_dir: &Path, abi: &str, running: &str, progress: &dyn Fn(u
     if sha256_hex(&lib) != sha || lib.len() as u64 != size {
         return Err("game library: hash mismatch".into());
     }
+    // At most two builds stay: the current downloaded one becomes the way back (libmezdu.prev.so) when it is the one
+    // running now or it already reached the menu; an untried one is simply replaced. The older way back goes.
+    let cur = read("build.txt");
+    if !cur.is_empty() && code.join("libmezdu.so").exists() && (cur == running || !code.join("booting").exists()) {
+        let _ = std::fs::remove_file(code.join("libmezdu.prev.so"));
+        let _ = std::fs::remove_file(code.join("prev.txt"));
+        if std::fs::rename(code.join("libmezdu.so"), code.join("libmezdu.prev.so")).is_ok() {
+            let _ = std::fs::rename(code.join("build.txt"), code.join("prev.txt"));
+        }
+    }
     // the launcher takes the library only with build.txt: away while the library is replaced
     let _ = std::fs::remove_file(code.join("build.txt"));
     let tmp = code.join("libmezdu.so.tmp");
@@ -374,5 +391,13 @@ pub fn check_code(data_dir: &Path, abi: &str, running: &str, progress: &dyn Fn(u
     }
     std::fs::rename(&tmp, code.join("libmezdu.so")).map_err(|e| e.to_string())?;
     std::fs::write(code.join("build.txt"), &build).map_err(|e| e.to_string())?;
+    // nothing else of older versions stays on the phone
+    const KEEP: [&str; 7] = ["libmezdu.so", "build.txt", "libmezdu.prev.so", "prev.txt", "launcher.txt", "booting", "failed.txt"];
+    for e in std::fs::read_dir(&code).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if !KEEP.contains(&n.as_str()) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
     Ok(CodeOutcome::Staged { build, bytes: packed.len() as u64 })
 }

@@ -46,14 +46,13 @@ pub unsafe fn open(vm: *mut c_void, activity: *mut c_void, url: &str) -> Result<
     }
 }
 
-/// Opens the game's activity anew in this same process, without closing the app: the restart intent of the launch
-/// activity (Intent.makeRestartActivityTask: a fresh task, the old activity cleared). Its start runs the launcher
-/// again, which loads the downloaded game library (a new file, so a new copy beside this one); the caller then ends
-/// its own event loop, so this copy lets its activity go.
+/// Starts the app again on the downloaded game library (the player asked for it in the restart window): the
+/// restart intent of the launch activity (Intent.makeRestartActivityTask) goes to the system, then this process
+/// ends before the system hands the new activity to it, so the new process runs the launcher afresh.
 ///
 /// # Safety
 /// as `open`
-pub unsafe fn relaunch(vm: *mut c_void, activity: *mut c_void) -> Result<(), String> {
+pub unsafe fn restart(vm: *mut c_void, activity: *mut c_void) -> Result<(), String> {
     unsafe {
         let vm = vm as *mut JavaVM;
         let mut env: *mut JNIEnv = std::ptr::null_mut();
@@ -92,7 +91,7 @@ pub unsafe fn relaunch(vm: *mut c_void, activity: *mut c_void) -> Result<(), Str
             call!(ExceptionClear);
             return Err("restart threw".into());
         }
-        log::info!("relaunching into the new game library");
-        Ok(())
+        log::info!("restarting on the new game library");
+        std::process::exit(0);
     }
 }

@@ -64,11 +64,28 @@ struct Loaded {
     world: World,
 }
 
-/// what the loader returns when a new game library is ready: the app restarts into it
-const RESTART: &str = "restart";
+/// What the updater found for the player, shared by the loader, the watch thread and the interface.
+#[derive(Default)]
+struct Updates {
+    /// a newer APK must be installed (a newer launcher is needed)
+    apk: Option<String>,
+    /// a newer game library is downloaded: «для применения обновления требуется перезапуск»
+    code: Option<String>,
+}
+
+type SharedUpdates = Arc<Mutex<Updates>>;
+
+fn found(up: &SharedUpdates, f: mezdu_updater::Found) {
+    if let Ok(mut u) = up.lock() {
+        match f {
+            mezdu_updater::Found::Apk(b) => u.apk = Some(b),
+            mezdu_updater::Found::Code(b) => u.code = Some(b),
+        }
+    }
+}
 
 /// The loader thread: updates, integrity, shaders, world. Nothing in it touches the window.
-fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st: Arc<Mutex<LoadState>>) -> Result<Loaded, String> {
+fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st: Arc<Mutex<LoadState>>, up: SharedUpdates) -> Result<Loaded, String> {
     let set = |stage: usize, frac: f32| {
         if let Ok(mut s) = st.lock() {
             s.stage = stage;
@@ -107,19 +124,14 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
             note(0, format!("программа: {} из {}", mb(done), mb(total)));
         }) {
             Ok(mezdu_updater::CodeOutcome::Staged { build, .. }) => {
-                // the new library takes over at once: the app starts again (once per build — if the launcher fell
-                // back to the bundled one, this build stays for the next start instead of a restart loop)
-                let mark = data_dir.join("code").join("restart.txt");
-                if std::fs::read_to_string(&mark).map(|b| b.trim() != build).unwrap_or(true) {
-                    let _ = std::fs::write(&mark, &build);
-                    set(0, 1.0);
-                    note(0, format!("программа {build} установлена, перезапуск…"));
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                    return Err(RESTART.into());
-                }
-                note(0, format!("{prev}; программа {build} заработает при следующем запуске"));
+                // the player is asked once the menu is up (this build is known to work by then)
+                note(0, format!("программа {build} скачана"));
+                found(&up, mezdu_updater::Found::Code(build));
             }
-            Ok(mezdu_updater::CodeOutcome::NeedApk { build }) => note(0, format!("{prev}; программа {build} требует установить новый APK")),
+            Ok(mezdu_updater::CodeOutcome::NeedApk { build }) => {
+                note(0, format!("{prev}; программа {build} требует установить новый APK"));
+                found(&up, mezdu_updater::Found::Apk(build));
+            }
             Ok(mezdu_updater::CodeOutcome::UpToDate) => note(0, prev),
             Err(e) => {
                 log::warn!("code update: {e}");
@@ -353,6 +365,9 @@ enum Action {
     AskDelete(usize),
     Delete(usize),
     CancelDelete,
+    /// the restart window: start the app again on the new game library / not now
+    Restart,
+    Later,
     Resume,
     Settings,
     Back,
@@ -405,19 +420,20 @@ pub struct App {
     /// seconds of play in this game
     playtime: f64,
     settings: save::Settings,
-    /// the new game library took over: this event loop ends
-    quit: bool,
+
     /// a short message at the top («Сохранено») and when it was shown
     toast: Option<(&'static str, Instant)>,
     /// commit of a newer APK in the release, set by the updater thread
-    apk: Arc<Mutex<Option<String>>>,
+    updates: SharedUpdates,
+    /// «Позже» on the restart window: not asked again in this run
+    update_later: bool,
     frames: u32,
     fps_t: Instant,
     pub fps: f32,
 }
 
 impl App {
-    pub fn new(data_dir: PathBuf, apk: Arc<Mutex<Option<String>>>) -> Self {
+    fn new(data_dir: PathBuf, updates: SharedUpdates) -> Self {
         let pack_dir = std::env::var("MEZDU_PACK").map(PathBuf::from).unwrap_or_else(|_| data_dir.join("pack"));
         let pack = match Pack::open(&pack_dir) {
             Ok(p) => {
@@ -472,8 +488,8 @@ impl App {
             playtime: 0.0,
             toast: None,
             settings,
-            quit: false,
-            apk,
+            updates,
+            update_later: false,
             frames: 0,
             fps_t: Instant::now(),
             fps: 0.0,
@@ -492,9 +508,9 @@ impl App {
         let Some(g) = &self.gfx else { return };
         let st = Arc::new(Mutex::new(LoadState::default()));
         let (tx, rx) = std::sync::mpsc::channel();
-        let (ctx, dir, fixed, st2) = (g.ctx(), self.data_dir.clone(), std::env::var_os("MEZDU_PACK").map(PathBuf::from), st.clone());
+        let (ctx, dir, fixed, st2, up) = (g.ctx(), self.data_dir.clone(), std::env::var_os("MEZDU_PACK").map(PathBuf::from), st.clone(), self.updates.clone());
         let _ = std::thread::Builder::new().name("loader".into()).spawn(move || {
-            let _ = tx.send(load(ctx, dir, fixed, st2));
+            let _ = tx.send(load(ctx, dir, fixed, st2, up));
         });
         self.loading = Some((st, rx));
         self.loading_frames = 0;
@@ -532,23 +548,6 @@ impl App {
                     // this library started and built the world: the launcher keeps it (crates/launcher)
                     let _ = std::fs::remove_file(self.data_dir.join("code").join("booting"));
                 }
-            }
-            Err(e) if e == RESTART => {
-                #[cfg(target_os = "android")]
-                if let Some(app) = ANDROID.get() {
-                    // SAFETY: pointers of the running activity, valid while the app runs
-                    match unsafe { url::relaunch(app.vm_as_ptr(), app.activity_as_ptr()) } {
-                        Ok(()) => {
-                            // this copy steps aside: its event loop ends (the next frame), its updater thread too
-                            mezdu_updater::STOP.store(true, std::sync::atomic::Ordering::Relaxed);
-                            self.quit = true;
-                            return;
-                        }
-                        Err(e) => log::error!("relaunch: {e}"),
-                    }
-                }
-                // no restart (desktop, or it failed): the old library goes on, the new one starts next time
-                self.start_loading();
             }
             Err(e) => {
                 log::error!("loading: {e}");
@@ -604,6 +603,20 @@ impl App {
                     }
                     _ => {}
                 }
+            }
+            Action::Later => self.update_later = true,
+            Action::Restart => {
+                self.autosave();
+                #[cfg(target_os = "android")]
+                if let Some(app) = ANDROID.get() {
+                    // SAFETY: pointers of the running activity, valid while the app runs
+                    if let Err(e) = unsafe { url::restart(app.vm_as_ptr(), app.activity_as_ptr()) } {
+                        log::error!("restart: {e}");
+                    }
+                }
+                #[cfg(not(target_os = "android"))]
+                log::info!("restart: start the game again for the new build");
+                self.update_later = true;
             }
             Action::AskDelete(i) => self.confirm = Some(i),
             Action::CancelDelete => self.confirm = None,
@@ -709,7 +722,7 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, st: &mut save::Settings, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
+    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, st: &mut save::Settings, restart: Option<&str>, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let big = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
             let b = egui::Button::new(egui::RichText::new(text).size(19.0).strong()).min_size(egui::vec2(260.0, 50.0));
             if ui.add_enabled(enabled, b).clicked() {
@@ -719,6 +732,28 @@ impl App {
         let shade = |ctx: &egui::Context, a: u8| {
             ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_rgba_unmultiplied(0x0d, 0x0b, 0x10, a));
         };
+        if let Some(b) = restart {
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dim"))).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_black_alpha(0x90));
+            egui::Area::new(egui::Id::unique("update")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).order(egui::Order::Tooltip).show(ctx, |ui| {
+                egui::Frame::window(ui.style()).inner_margin(20.0).corner_radius(18.0).show(ui, |ui| {
+                    ui.set_width(340.0);
+                    ui.label(egui::RichText::new("Обновление готово").size(20.0).strong());
+                    ui.label(egui::RichText::new(format!("Сборка {b} скачана. Для применения обновления требуется перезапуск.")).size(14.0).color(INK.gamma_multiply(0.8)));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().button_padding = egui::vec2(14.0, 4.0);
+                        let go = egui::Button::new(egui::RichText::new("Перезапустить").size(15.0).color(ACCENT)).min_size(egui::vec2(170.0, 32.0));
+                        if ui.add(go).clicked() {
+                            out.push(Action::Restart);
+                        }
+                        if ui.add(egui::Button::new(egui::RichText::new("Позже").size(15.0)).min_size(egui::vec2(110.0, 32.0))).clicked() {
+                            out.push(Action::Later);
+                        }
+                    });
+                });
+            });
+            return;
+        }
         if let Some(t) = sv.toast {
             egui::Area::new(egui::Id::unique("toast")).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0)).order(egui::Order::Foreground).show(ctx, |ui| {
                 egui::Frame::window(ui.style()).inner_margin(egui::Margin::symmetric(22, 10)).corner_radius(255).show(ui, |ui| {
@@ -1050,10 +1085,6 @@ impl App {
         let dt = self.last.elapsed().as_secs_f32().min(0.1);
         self.last = Instant::now();
         self.poll_loading();
-        if self.quit {
-            el.exit();
-            return;
-        }
         self.loading_frames += 1;
         let time = self.frozen.unwrap_or_else(|| self.start.elapsed().as_secs_f32());
         let size = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
@@ -1105,7 +1136,9 @@ impl App {
             self.cam.yaw = MENU_CAM[3] + (time * 0.07).sin() * 0.06;
         }
         let info = self.sys_info();
-        let apk = self.apk.lock().ok().and_then(|a| a.clone());
+        let (apk, code) = self.updates.lock().map(|u| (u.apk.clone(), u.code.clone())).unwrap_or_default();
+        // the restart window: on the menu and the pause, until «Позже»
+        let restart = code.filter(|_| !self.update_later && matches!(self.screen, Screen::Menu | Screen::Paused));
         let (screen, err) = (self.screen, self.load_error.clone());
         if self.toast.is_some_and(|(_, t)| t.elapsed().as_secs_f32() > 2.0) {
             self.toast = None;
@@ -1118,7 +1151,7 @@ impl App {
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &mut st, &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &mut st, restart.as_deref(), &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
         if st != self.settings {
             self.settings = st;
@@ -1222,22 +1255,20 @@ pub const ABI: Option<&str> = if cfg!(not(target_os = "android")) {
 
 pub fn run(event_loop: EventLoop<()>, data_dir: PathBuf) {
     event_loop.set_control_flow(ControlFlow::Wait);
-    let apk = Arc::new(Mutex::new(None));
+    let updates: SharedUpdates = Arc::default();
     // the pack in the data dir is checked against the release in the background; with MEZDU_PACK (a pack picked
     // by hand on the desktop) nothing is downloaded
     if std::env::var_os("MEZDU_PACK").is_none() {
         mezdu_updater::install_staged(&data_dir);
-        let (dir, slot) = (data_dir.clone(), apk.clone());
+        let (dir, up) = (data_dir.clone(), updates.clone());
         let _ = std::thread::Builder::new().name("updater".into()).spawn(move || {
-            mezdu_updater::watch(dir, BUILD, ABI, move |c| {
-                log::info!("a newer APK ({c}) is available");
-                if let Ok(mut s) = slot.lock() {
-                    *s = Some(c);
-                }
+            mezdu_updater::watch(dir, BUILD, ABI, move |f| {
+                log::info!("updater found {f:?}");
+                found(&up, f);
             });
         });
     }
-    let mut app = App::new(data_dir, apk);
+    let mut app = App::new(data_dir, updates);
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("event loop: {e}");
     }

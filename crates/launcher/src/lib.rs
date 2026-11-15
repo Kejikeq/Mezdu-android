@@ -1,25 +1,41 @@
 //! The launcher: NativeActivity calls `ANativeActivity_onCreate` here; it loads the game library and forwards the
 //! call to the game's own `ANativeActivity_onCreate` (android-activity inside libmezdu.so takes it from there).
 //!
-//! Which game library:
-//! - `<data>/code/libmezdu.so` when the game downloaded a newer build (the game's updater writes it read-only and
-//!   then `code/build.txt`; the launcher uses it only when both are there);
+//! Which game library (launcher 2): at most two downloaded builds are kept in `<data>/code`:
+//! - `libmezdu.so` + `build.txt` — the newest build the game downloaded (the game's updater writes the library
+//!   read-only, then `build.txt`; the launcher uses it only when both are there);
+//! - `libmezdu.prev.so` + `prev.txt` — the build before it, which did start: the way back;
 //! - otherwise `libmezdu.so` of the APK.
 //!
 //! Guard: before handing over to a downloaded library the launcher writes `code/booting`; the game deletes it once
-//! its first frame is on screen. A `booting` left from the last start means that build did not come up: the launcher
-//! deletes it and starts the APK's library, so a broken download can never lock the player out.
+//! the menu is on screen. A `booting` left from the last start means that build did not come up: the launcher
+//! writes its build to `failed.txt` (the game does not download it again), deletes it and starts the previous build
+//! (or the APK's library), so a broken download can never lock the player out.
 use std::path::{Path, PathBuf};
 
 /// Bumped when the launcher changes in a way the game must know about (the game reads `code/launcher.txt`): a
 /// newer game build that needs a newer launcher asks for the APK instead of being loaded.
-pub const LAUNCHER: u32 = 1;
+pub const LAUNCHER: u32 = 2;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Choice {
     /// the APK's library (by soname, found in the APK's lib directory)
     Bundled,
     Downloaded(PathBuf),
+}
+
+/// The newest build failed: it goes, the previous one (if any) takes its place.
+pub fn roll_back(code: &Path) {
+    let (lib, build, prev, prev_build) = (code.join("libmezdu.so"), code.join("build.txt"), code.join("libmezdu.prev.so"), code.join("prev.txt"));
+    if let Ok(b) = std::fs::read_to_string(&build) {
+        let _ = std::fs::write(code.join("failed.txt"), b.trim());
+    }
+    let _ = std::fs::remove_file(&build);
+    let _ = std::fs::remove_file(&lib);
+    let _ = std::fs::remove_file(code.join("booting"));
+    if prev.exists() && prev_build.exists() && std::fs::rename(&prev, &lib).is_ok() {
+        let _ = std::fs::rename(&prev_build, &build);
+    }
 }
 
 /// The decision, separated from Android so the desktop tests check it.
@@ -29,11 +45,8 @@ pub fn choose(data: &Path) -> Choice {
     let _ = std::fs::create_dir_all(&code);
     let _ = std::fs::write(code.join("launcher.txt"), LAUNCHER.to_string());
     if booting.exists() {
-        // the downloaded build did not reach its first frame last time: back to the APK's library
-        let _ = std::fs::remove_file(&build);
-        let _ = std::fs::remove_file(&lib);
-        let _ = std::fs::remove_file(&booting);
-        return Choice::Bundled;
+        // the newest build did not reach the menu last time: back to the one before it
+        roll_back(&code);
     }
     if lib.exists() && build.exists() {
         let _ = std::fs::write(&booting, b"");
@@ -96,17 +109,19 @@ mod android {
             let head = &*(activity as *const NativeActivityHead);
             let data = if head.internal_data_path.is_null() { None } else { Some(PathBuf::from(CStr::from_ptr(head.internal_data_path).to_string_lossy().into_owned())) };
             let mut h = std::ptr::null_mut();
-            if let Some(Choice::Downloaded(p)) = data.as_deref().map(choose) {
-                log(&format!("launcher {LAUNCHER}: downloaded game library {}", p.display()));
-                h = open(&p.to_string_lossy());
-                if h.is_null() {
-                    // unusable: drop it and its marks, start the APK's library
-                    if let Some(d) = &data {
-                        for f in ["libmezdu.so", "build.txt", "booting"] {
-                            let _ = std::fs::remove_file(d.join("code").join(f));
+            // two tries: the newest downloaded build, then (if it does not even load) the one before it
+            for _ in 0..2 {
+                if let Some(Choice::Downloaded(p)) = data.as_deref().map(choose) {
+                    log(&format!("launcher {LAUNCHER}: downloaded game library {}", p.display()));
+                    h = open(&p.to_string_lossy());
+                    if h.is_null() {
+                        if let Some(d) = &data {
+                            roll_back(&d.join("code"));
                         }
+                        continue;
                     }
                 }
+                break;
             }
             if h.is_null() {
                 log(&format!("launcher {LAUNCHER}: game library of the APK"));
@@ -155,14 +170,22 @@ mod tests {
     }
 
     #[test]
-    fn failed_boot_falls_back() {
+    fn failed_boot_falls_back_to_the_previous_build() {
         let d = dir("c");
-        std::fs::write(d.join("code/libmezdu.so"), b"x").unwrap();
-        std::fs::write(d.join("code/build.txt"), b"abc1234").unwrap();
+        let c = d.join("code");
+        std::fs::write(c.join("libmezdu.so"), b"new").unwrap();
+        std::fs::write(c.join("build.txt"), b"bbbbbbb").unwrap();
+        std::fs::write(c.join("libmezdu.prev.so"), b"old").unwrap();
+        std::fs::write(c.join("prev.txt"), b"aaaaaaa").unwrap();
         assert!(matches!(choose(&d), Choice::Downloaded(_)));
-        // the game never reached its first frame: booting is still there
+        // the game never reached the menu: booting is still there → the previous build, the failed one remembered
+        assert_eq!(choose(&d), Choice::Downloaded(c.join("libmezdu.so")));
+        assert_eq!(std::fs::read(c.join("libmezdu.so")).unwrap(), b"old");
+        assert_eq!(std::fs::read_to_string(c.join("build.txt")).unwrap(), "aaaaaaa");
+        assert_eq!(std::fs::read_to_string(c.join("failed.txt")).unwrap(), "bbbbbbb");
+        assert!(!c.join("libmezdu.prev.so").exists());
+        // that one fails too: the APK's library
         assert_eq!(choose(&d), Choice::Bundled);
-        assert!(!d.join("code/libmezdu.so").exists() && !d.join("code/build.txt").exists() && !d.join("code/booting").exists());
-        assert_eq!(choose(&d), Choice::Bundled);
+        assert!(!c.join("libmezdu.so").exists() && !c.join("build.txt").exists() && !c.join("booting").exists());
     }
 }
