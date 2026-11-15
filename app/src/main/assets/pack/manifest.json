@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "72fbf440c4e0f05bbeb39a69e9fb3175c5badc9d",
- "created": "2026-11-15T16:24:55.277Z",
+ "commit": "7afacaeb2f942b03eef7e72362133ef3444d7393",
+ "created": "2026-11-15T19:29:21.539Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -40,6 +40,18 @@
    "GLYPH": 64,
    "HAZARD": 128
   }
+ },
+ "nightExposure": {
+  "1": 1.4,
+  "2": 1.4,
+  "3": 1.4,
+  "4": 1.4,
+  "5": 1.4,
+  "6": 1.4,
+  "7": 1.4,
+  "8": 1.4,
+  "9": 1.4,
+  "10": 1.4
  },
  "files": [
   {
@@ -616,6 +628,13 @@
    "entry": false
   },
   {
+   "path": "script/game/duality.js",
+   "sha256": "0e0de211d90c8b19813fce9c39f5581a75a7a380a677eb9ffc843acf496a24f6",
+   "size": 9166,
+   "kind": "script",
+   "entry": true
+  },
+  {
    "path": "script/game/interaction_los.js",
    "sha256": "6cd6f998e86a34701b41718bfb3db73818b18e626ea3e00d02237131ee2fca79",
    "size": 5079,
@@ -763,9 +782,23 @@
    "entry": false
   },
   {
+   "path": "script/world/chunkStore.js",
+   "sha256": "17b95526a80dd9c56f864f91200fe8f00c80b4f1d1326b8c6a41afc6b92e41d8",
+   "size": 23459,
+   "kind": "script",
+   "entry": false
+  },
+  {
    "path": "script/world/layout.js",
    "sha256": "31f7ab24b9804eb9ac35c4e2185cdd5bb315c6294bd125b5e23c94d7ac0e1f50",
    "size": 31328,
+   "kind": "script",
+   "entry": false
+  },
+  {
+   "path": "script/world/materials.js",
+   "sha256": "b916c0ce0b59ae8c8f933b1f91a1f5a9b58e61de35bf6c148f84796ad547a632",
+   "size": 10753,
    "kind": "script",
    "entry": false
   },
