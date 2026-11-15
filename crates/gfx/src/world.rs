@@ -689,6 +689,11 @@ impl World {
     }
 
     /// instances the game moves every frame (the hero's rig), see Props::set_dynamic
+    /// a story prop shown or hidden (see Props::set_visible)
+    pub fn set_prop_visible(&mut self, q: &wgpu::Queue, model: &str, pos: [f32; 3], on: bool) -> usize {
+        self.props.as_mut().map_or(0, |p| p.set_visible(q, model, pos, on))
+    }
+
     pub fn set_dynamic(&mut self, q: &wgpu::Queue, words: &[u32]) {
         if let Some(p) = &mut self.props {
             p.set_dynamic(q, words);

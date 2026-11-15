@@ -4,7 +4,7 @@ light templates, the models with their instances (when exported) and the meshes 
 import json, shutil, sys
 from pathlib import Path
 
-KINDS = {'shader', 'materials', 'tex', 'atlas', 'frame', 'models', 'grass'}
+KINDS = {'shader', 'materials', 'tex', 'atlas', 'frame', 'models', 'grass', 'script'}
 MESH_TILES = {(x, z) for x in range(0, 3) for z in range(8, 10)}  # chapter 1 village
 src = Path(sys.argv[1])
 dst = Path(sys.argv[2] if len(sys.argv) > 2 else 'app/src/main/assets/pack')

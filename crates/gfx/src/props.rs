@@ -12,6 +12,8 @@ pub struct Props {
     n: usize,
     n_dyn: usize,
     vis_base: Vec<u32>,
+    /// each static instance's world mask as packed (a prop hidden at export: both worlds)
+    mask0: Vec<u32>,
     pub minfo: wgpu::Buffer,
     pub mfaces: wgpu::Buffer,
     pub insts: wgpu::Buffer,
@@ -78,7 +80,9 @@ impl Props {
         let others = (0..meta.len()).filter(|&i| !is_tree(&meta[i])).collect();
         let casters = (0..meta.len()).filter(|&i| meta[i].flags & 1 != 0).collect();
         log::info!("props: {} models, {} instances", meta.len(), n);
+        let mask0 = (0..n).map(|i| if inst[i * W + 13] & 3 == 0 { inst[i * W + 13] | 3 } else { inst[i * W + 13] }).collect();
         Ok(Some(Props {
+            mask0,
             max_quads: meta.iter().map(|m| m.face_count).max().unwrap_or(1),
             radius,
             n,
@@ -108,6 +112,29 @@ impl Props {
         self.inst[self.n * W..(self.n + k) * W].copy_from_slice(&words[..k * W]);
         self.n_dyn = k;
         q.write_buffer(&self.insts, (self.n * W * 4) as u64, bytemuck_u32(&self.inst[self.n * W..(self.n + k) * W]));
+    }
+
+    /// A story prop shown or hidden (G.place(...).show in the scripts): the static instances of `model` and its
+    /// far versions (`_l`, `_f`) within 0.3 m of `pos`. Returns how many changed.
+    pub fn set_visible(&mut self, q: &wgpu::Queue, model: &str, pos: [f32; 3], on: bool) -> usize {
+        let mut n = 0;
+        for i in 0..self.n {
+            let name = &self.meta[self.inst[i * W + 12] as usize].name;
+            if name != model && name.strip_suffix("_l").or(name.strip_suffix("_f")) != Some(model) {
+                continue;
+            }
+            let (p, _) = self.pos(i);
+            if (p[0] - pos[0]).abs() > 0.3 || (p[1] - pos[1]).abs() > 0.3 || (p[2] - pos[2]).abs() > 0.3 {
+                continue;
+            }
+            let want = if on { self.mask0[i] } else { 0 };
+            if self.inst[i * W + 13] != want {
+                self.inst[i * W + 13] = want;
+                q.write_buffer(&self.insts, ((i * W + 13) * 4) as u64, &want.to_le_bytes());
+                n += 1;
+            }
+        }
+        n
     }
 
     fn pos(&self, i: usize) -> ([f32; 3], f32) {

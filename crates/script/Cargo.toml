@@ -1,0 +1,16 @@
+[package]
+name = "mezdu-script"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# QuickJS: runs the web game's story scripts from the pack (script/*.js), so the story stays one code for both
+rquickjs = { version = "0.14", features = ["loader"] }
+mezdu-core.workspace = true
+log.workspace = true
+serde_json.workspace = true
+
+# rquickjs ships no C bindings for Android: generated at build time there (libclang of the CI runner, the NDK's
+# sysroot from cargo-ndk)
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "0.14", features = ["loader", "bindgen"] }

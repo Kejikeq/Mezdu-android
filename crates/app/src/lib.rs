@@ -8,6 +8,7 @@ use mezdu_gfx::world::{Camera, World};
 use mezdu_gfx::Gfx;
 use mezdu_ui::{egui, Phase, Ui, ACCENT, INK};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -33,13 +34,47 @@ type Joystick = (u64, (f64, f64), (f64, f64));
 
 /// the hero walking the voxel world (player.js) with the rig drawn by the renderer
 struct Hero {
-    vox: Voxels,
+    vox: Rc<Voxels>,
     player: Player,
     rig: Option<RigModels>,
     words: Vec<u32>,
     /// on-screen joystick: touch id, where it started, where it is
     joy: Option<Joystick>,
     look: [f32; 2],
+}
+
+/// The voxels as the story scripts ask about them (mezdu_script::World).
+struct VoxWorld(Rc<Voxels>);
+impl mezdu_script::World for VoxWorld {
+    fn solid(&self, x: i32, y: i32, z: i32) -> bool {
+        self.0.solid(x, y, z)
+    }
+    fn ground(&self, x: f32, z: f32) -> f32 {
+        let v = &self.0;
+        let (ix, iz) = ((x / v.vs).floor() as i32, (z / v.vs).floor() as i32);
+        (1..v.wy).rev().find(|&y| v.solid(ix, y - 1, iz)).map_or(0.0, |y| y as f32 * v.vs)
+    }
+}
+
+/// A window of the story over the game: a text to read or a thing found, answered by a button.
+#[derive(Clone)]
+enum Panel {
+    Read { id: u32, title: String, paras: Vec<String>, night: bool },
+    Inspect { id: u32, kicker: String, title: String, desc: String, buttons: Vec<(String, serde_json::Value)> },
+}
+
+/// What the story shows over the game.
+#[derive(Default)]
+struct Hud {
+    /// the line being said: who, what, until when (seconds of the clock)
+    say: Option<(String, String, f32)>,
+    objective: String,
+    /// the action button: what it does here ("" = nothing near)
+    prompt: String,
+    panel: Option<Panel>,
+    /// the backpack as the scripts keep it, and the item looked at
+    items: Vec<mezdu_script::Item>,
+    sel: usize,
 }
 
 /// megabytes with one decimal, as the loading screen shows them ("9,8 МБ")
@@ -304,6 +339,143 @@ fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
     }
 }
 
+/// The story over the game: the objective, the backpack button, the line being said, the action button and the
+/// story's windows (a text to read, a thing found).
+fn story_hud(ctx: &egui::Context, hud: &Hud, out: &mut Vec<Action>) {
+    if !hud.objective.is_empty() {
+        egui::Area::new(egui::Id::unique("objective")).anchor(egui::Align2::LEFT_TOP, egui::vec2(18.0, 34.0)).order(egui::Order::Background).show(ctx, |ui| {
+            ui.set_max_width(320.0);
+            ui.label(egui::RichText::new("цель").size(11.0).color(ACCENT));
+            ui.label(egui::RichText::new(&hud.objective).size(13.0).color(INK.gamma_multiply(0.85)));
+        });
+    }
+    let sw = ctx.content_rect().width();
+    // the backpack: a bag drawn by hand, with the count of things not looked at yet (not while a window is open)
+    egui::Area::new(egui::Id::unique("bag")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-82.0, 18.0)).enabled(hud.panel.is_none()).show(ctx, |ui| {
+        let r = ui.add(egui::Button::new("").min_size(egui::vec2(52.0, 52.0)).corner_radius(26.0));
+        let (c, p) = (r.rect.center(), ui.painter());
+        p.rect_stroke(egui::Rect::from_center_size(c + egui::vec2(0.0, 3.0), egui::vec2(20.0, 16.0)), 4.0, egui::Stroke::new(2.0, INK), egui::StrokeKind::Middle);
+        p.rect_stroke(egui::Rect::from_center_size(c + egui::vec2(0.0, -7.0), egui::vec2(9.0, 6.0)), 3.0, egui::Stroke::new(2.0, INK), egui::StrokeKind::Middle);
+        let new = hud.items.iter().filter(|i| !i.seen).count();
+        if new > 0 {
+            let b = r.rect.right_top() + egui::vec2(-8.0, 8.0);
+            p.circle_filled(b, 9.0, EMBER);
+            p.text(b, egui::Align2::CENTER_CENTER, new.to_string(), egui::FontId::proportional(11.0), INK);
+        }
+        if r.clicked() {
+            out.push(Action::OpenBag);
+        }
+    });
+    if let Some((who, text, _)) = &hud.say {
+        egui::Area::new(egui::Id::unique("say")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -22.0)).order(egui::Order::Background).interactable(false).show(ctx, |ui| {
+            egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(10, 8, 12, 0xb0)).corner_radius(12.0).inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
+                ui.set_max_width((sw - 64.0).min(560.0));
+                if !who.is_empty() {
+                    ui.label(egui::RichText::new(who).size(12.0).color(ACCENT));
+                }
+                ui.label(egui::RichText::new(text).size(15.0).color(INK));
+            });
+        });
+    }
+    if !hud.prompt.is_empty() && hud.panel.is_none() {
+        egui::Area::new(egui::Id::unique("use")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-24.0, -96.0)).show(ctx, |ui| {
+            ui.spacing_mut().button_padding = egui::vec2(16.0, 8.0);
+            let b = egui::Button::new(egui::RichText::new(&hud.prompt).size(14.0).color(INK)).wrap().corner_radius(16.0).min_size(egui::vec2(200.0, 44.0));
+            ui.set_max_width(300.0);
+            if ui.add(b).clicked() {
+                out.push(Action::Use);
+            }
+        });
+    }
+    let Some(panel) = &hud.panel else { return };
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("panel dim"))).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_black_alpha(0x90));
+    egui::Area::new(egui::Id::unique("panel")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+        egui::Frame::window(ui.style()).inner_margin(20.0).corner_radius(18.0).show(ui, |ui| {
+            ui.set_width((sw - 72.0).min(440.0));
+            ui.spacing_mut().button_padding = egui::vec2(14.0, 4.0);
+            match panel {
+                Panel::Read { id, title, paras, night } => {
+                    if !title.is_empty() {
+                        ui.label(egui::RichText::new(title).size(13.0).color(if *night { EMBER } else { ACCENT }));
+                    }
+                    egui::ScrollArea::vertical().max_height(230.0).show(ui, |ui| {
+                        for p in paras {
+                            ui.label(egui::RichText::new(p).size(15.0).color(INK));
+                        }
+                    });
+                    ui.add_space(6.0);
+                    if ui.add(egui::Button::new(egui::RichText::new("Закрыть").size(15.0)).min_size(egui::vec2(140.0, 32.0))).clicked() {
+                        out.push(Action::Answer(*id, 0));
+                    }
+                }
+                Panel::Inspect { id, kicker, title, desc, buttons } => {
+                    if !kicker.is_empty() {
+                        ui.label(egui::RichText::new(kicker).size(12.0).color(ACCENT));
+                    }
+                    ui.label(egui::RichText::new(title).size(19.0).strong());
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        ui.label(egui::RichText::new(desc).size(14.0).color(INK.gamma_multiply(0.85)));
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        for (k, (label, _)) in buttons.iter().enumerate() {
+                            let t = egui::RichText::new(label).size(15.0);
+                            let t = if k == 0 { t.color(ACCENT) } else { t };
+                            if ui.add(egui::Button::new(t).min_size(egui::vec2(120.0, 32.0))).clicked() {
+                                out.push(Action::Answer(*id, k));
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    });
+}
+
+/// The backpack (the inventory of the web game): the things on the left, the one picked on the right.
+fn bag(ctx: &egui::Context, hud: &Hud, out: &mut Vec<Action>) {
+    let w = (ctx.content_rect().width() - 60.0).min(600.0);
+    egui::Area::new(egui::Id::unique("bag screen")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
+        egui::Frame::window(ui.style()).inner_margin(18.0).corner_radius(18.0).show(ui, |ui| {
+            ui.set_width(w);
+            ui.label(egui::RichText::new("Вещи").size(22.0).strong());
+            if hud.items.is_empty() {
+                ui.label(egui::RichText::new("Пока пусто. Найденное ляжет сюда.").size(14.0).color(INK.gamma_multiply(0.6)));
+            } else {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(w * 0.38);
+                        egui::ScrollArea::vertical().id_salt("items").max_height(240.0).show(ui, |ui| {
+                            for (i, it) in hud.items.iter().enumerate() {
+                                let t = egui::RichText::new(if it.seen { it.name.clone() } else { format!("• {}", it.name) }).size(13.0);
+                                let t = if i == hud.sel { t.color(ACCENT) } else { t };
+                                if ui.add(egui::Button::new(t).wrap().min_size(egui::vec2(w * 0.36, 30.0))).clicked() {
+                                    out.push(Action::Item(i));
+                                }
+                            }
+                        });
+                    });
+                    if let Some(it) = hud.items.get(hud.sel) {
+                        ui.vertical(|ui| {
+                            ui.set_width(w * 0.58);
+                            egui::ScrollArea::vertical().id_salt("item").max_height(240.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new(&it.name).size(17.0).strong());
+                                ui.label(egui::RichText::new(&it.desc).size(14.0).color(INK.gamma_multiply(0.85)));
+                                if !it.hint.is_empty() {
+                                    ui.add_space(4.0);
+                                    ui.label(egui::RichText::new(&it.hint).size(12.0).italics().color(ACCENT.gamma_multiply(0.85)));
+                                }
+                            });
+                        });
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            back(ui, out);
+        });
+    });
+}
+
 /// the compact «Назад» of the settings and the slot screens
 fn back(ui: &mut egui::Ui, out: &mut Vec<Action>) {
     let b = egui::Button::new(egui::RichText::new("Назад").size(15.0)).min_size(egui::vec2(160.0, 32.0));
@@ -340,7 +512,7 @@ struct Prompt {
 struct SlotsView<'a> {
     rows: &'a [Option<(String, String)>; 4],
     confirm: Option<usize>,
-    toast: Option<&'static str>,
+    toast: Option<&'a str>,
     fps: f32,
 }
 
@@ -359,6 +531,8 @@ enum Screen {
     Load,
     /// the slots 1-3 to save into (from the pause)
     Save,
+    /// the backpack (from the game or the pause)
+    Bag,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -378,6 +552,13 @@ enum Action {
     Later,
     /// «Нет» on the new-APK window
     ApkLater,
+    /// the action button of the story (what the prompt says)
+    Use,
+    /// a story window closed by its button (window id, button)
+    Answer(u32, usize),
+    OpenBag,
+    /// an item picked in the backpack
+    Item(usize),
     Resume,
     Settings,
     Back,
@@ -404,6 +585,11 @@ pub struct App {
     load_notes: [String; 4],
     screen: Screen,
     hero: Option<Hero>,
+    /// the web game's story scripts from the pack (crates/script)
+    script: Option<mezdu_script::Script>,
+    hud: Hud,
+    /// where the backpack returns to (the game or the pause)
+    bag_back: Screen,
     cam: Camera,
     touches: HashMap<u64, (f64, f64)>,
     /// the finger the interface owns (it landed on a button or a window)
@@ -432,7 +618,7 @@ pub struct App {
     settings: save::Settings,
 
     /// a short message at the top («Сохранено») and when it was shown
-    toast: Option<(&'static str, Instant)>,
+    toast: Option<(String, Instant)>,
     /// commit of a newer APK in the release, set by the updater thread
     updates: SharedUpdates,
     /// «Позже» on the restart window: not asked again in this run
@@ -460,7 +646,7 @@ impl App {
         let hero = pack.as_ref().and_then(|p| match Voxels::load(p) {
             Ok(vox) => {
                 let player = Player::new(&vox);
-                Some(Hero { vox, player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] })
+                Some(Hero { vox: Rc::new(vox), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] })
             }
             Err(e) => {
                 log::warn!("no voxels: {e}");
@@ -481,6 +667,9 @@ impl App {
             load_notes: Default::default(),
             screen: Screen::Loading,
             hero,
+            script: None,
+            hud: Hud::default(),
+            bag_back: Screen::Playing,
             cam: Camera { pos: glam::Vec3::new(MENU_CAM[0], MENU_CAM[1], MENU_CAM[2]), yaw: MENU_CAM[3], pitch: MENU_CAM[4], fov_y: 1.0 },
             touches: HashMap::new(),
             ui_touch: None,
@@ -542,16 +731,27 @@ impl App {
             Ok(l) => {
                 log::info!("loaded: pack {} · quality {:?}", &l.pack.manifest.commit[..7.min(l.pack.manifest.commit.len())], l.world.quality);
                 match (&mut self.hero, l.vox) {
-                    (Some(h), Some(v)) => h.vox = v,
+                    (Some(h), Some(v)) => h.vox = Rc::new(v),
                     (None, Some(vox)) => {
                         let player = Player::new(&vox);
-                        self.hero = Some(Hero { vox, player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] });
+                        self.hero = Some(Hero { vox: Rc::new(vox), player, rig: None, words: Vec::with_capacity(16 * 16), joy: None, look: [0.0; 2] });
                     }
                     _ => {}
                 }
                 if let Some(h) = &mut self.hero {
                     h.rig = RigModels::find("hero", &l.world.model_names());
                 }
+                // the story: the pack's scripts over these voxels
+                self.script = match (&self.hero, &l.pack) {
+                    (Some(h), p) => match mezdu_script::sources(p).and_then(|src| mezdu_script::Script::new(src, Rc::new(VoxWorld(h.vox.clone())))) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            log::warn!("story: {e}");
+                            None
+                        }
+                    },
+                    _ => None,
+                };
                 self.pack = Some(l.pack);
                 self.world = Some(l.world);
                 if self.screen == Screen::Loading {
@@ -585,10 +785,15 @@ impl App {
                     self.screen = Screen::Playing;
                     self.playtime = 0.0;
                 }
+                self.hud = Hud::default();
+                if let Some(sc) = &self.script {
+                    sc.new_game();
+                }
+                self.story_events();
             }
             Action::Continue => {
-                if let Some((_, s)) = save::latest(&self.data_dir) {
-                    self.apply(&s);
+                if let Some((slot, s)) = save::latest(&self.data_dir) {
+                    self.apply(slot, &s);
                     self.screen = Screen::Playing;
                 }
             }
@@ -604,18 +809,48 @@ impl App {
                     Screen::Load => {
                         if let Some(s) = self.slots[i] {
                             log::info!("load slot {slot}");
-                            self.apply(&s);
+                            self.apply(slot, &s);
                             self.screen = Screen::Playing;
                         }
                     }
                     Screen::Save if i > 0 => {
                         if self.write_slot_as(slot, true) {
-                            self.toast = Some(("Сохранено", Instant::now()));
+                            self.toast = Some(("Сохранено".into(), Instant::now()));
                         }
                         self.screen = Screen::Paused;
                     }
                     _ => {}
                 }
+            }
+            Action::Use => {
+                if let (Some(sc), None) = (&self.script, &self.hud.panel) {
+                    sc.act();
+                }
+                self.story_events();
+            }
+            Action::Answer(id, k) => {
+                let v = match &self.hud.panel {
+                    Some(Panel::Inspect { id: pid, buttons, .. }) if *pid == id => buttons.get(k).map(|b| b.1.clone()).unwrap_or(serde_json::Value::Bool(false)),
+                    _ => serde_json::Value::Bool(true),
+                };
+                self.hud.panel = None;
+                if let Some(sc) = &self.script {
+                    sc.answer(id, &v);
+                }
+                self.story_events();
+            }
+            Action::OpenBag => {
+                if let Some(sc) = &self.script {
+                    self.hud.items = sc.inventory();
+                }
+                self.hud.sel = self.hud.sel.min(self.hud.items.len().saturating_sub(1));
+                self.bag_back = if self.screen == Screen::Paused { Screen::Paused } else { Screen::Playing };
+                self.screen = Screen::Bag;
+                self.mark_seen();
+            }
+            Action::Item(i) => {
+                self.hud.sel = i;
+                self.mark_seen();
             }
             Action::Later => self.update_later = true,
             Action::ApkLater => self.apk_later = true,
@@ -636,6 +871,7 @@ impl App {
             Action::CancelDelete => self.confirm = None,
             Action::Delete(i) => {
                 save::delete(&self.data_dir, save::SLOTS[i]);
+                save::delete_story(&self.data_dir, save::SLOTS[i]);
                 self.confirm = None;
                 self.refresh_slots();
             }
@@ -648,6 +884,7 @@ impl App {
                 self.remember_back();
                 self.screen = Screen::Settings;
             }
+            Action::Back if self.screen == Screen::Bag => self.screen = self.bag_back,
             // from the settings or the slots: where they were opened
             Action::Back if self.back_to == Screen::Paused => self.screen = Screen::Paused,
             Action::Back | Action::ToMenu => {
@@ -673,6 +910,46 @@ impl App {
         self.joystick_reset();
     }
 
+    /// the item looked at in the backpack is no longer new
+    fn mark_seen(&mut self) {
+        if let (Some(sc), Some(it)) = (&self.script, self.hud.items.get_mut(self.hud.sel)) {
+            if !it.seen {
+                sc.seen(&it.id);
+                it.seen = true;
+            }
+        }
+    }
+
+    /// What the story said since the last frame: lines, the objective, the action button, its windows, props and
+    /// the hero's moves.
+    fn story_events(&mut self) {
+        let Some(sc) = &self.script else { return };
+        let now = self.start.elapsed().as_secs_f32();
+        for e in sc.drain() {
+            use mezdu_script::Event as E;
+            match e {
+                E::Say { text, dur, who } => self.hud.say = Some((who, text, now + dur)),
+                E::Objective(t) => self.hud.objective = t,
+                E::Toast(t) => self.toast = Some((t, Instant::now())),
+                E::Prompt { label, .. } => self.hud.prompt = label,
+                E::Read { id, title, paras, night } => self.hud.panel = Some(Panel::Read { id, title, paras, night }),
+                E::Inspect { id, kicker, title, desc, buttons, .. } => self.hud.panel = Some(Panel::Inspect { id, kicker, title, desc, buttons }),
+                E::Prop { model, pos, on } => {
+                    if let (Some(w), Some(g)) = (&mut self.world, &self.gfx) {
+                        w.set_prop_visible(&g.queue, &model, pos, on);
+                    }
+                }
+                E::Teleport { pos, yaw } => {
+                    if let Some(h) = &mut self.hero {
+                        h.player.place(pos[0], pos[1], pos[2], yaw);
+                    }
+                }
+                E::Inventory => self.hud.items = sc.inventory(),
+                E::Menu => self.screen = Screen::Menu,
+            }
+        }
+    }
+
     /// where Back returns from the settings or the slots: only the menu or the pause count (a tap that arrives
     /// twice must not make the settings their own way back)
     fn remember_back(&mut self) {
@@ -682,7 +959,16 @@ impl App {
     }
 
     /// the game where a save left it
-    fn apply(&mut self, s: &save::Save) {
+    fn apply(&mut self, slot: &str, s: &save::Save) {
+        // the story first: its restore may move the hero, the save's place wins
+        self.hud = Hud::default();
+        if let Some(sc) = &self.script {
+            match save::read_story(&self.data_dir, slot) {
+                Some(j) => sc.restore(&j),
+                None => sc.new_game(),
+            }
+        }
+        self.story_events();
         if let Some(h) = &mut self.hero {
             h.player.place(s.pos[0], s.pos[1], s.pos[2], s.yaw);
             h.player.cam_yaw = s.cam_yaw;
@@ -713,6 +999,9 @@ impl App {
         let p = &h.player;
         let s = save::Save { pos: p.pos, yaw: p.yaw, cam_yaw: p.cam_yaw, cam_pitch: p.cam_pitch, playing, chapter: 1, playtime: self.playtime, time: save::now() };
         let ok = save::write(&self.data_dir, slot, &s);
+        if let Some(sc) = &self.script {
+            save::write_story(&self.data_dir, slot, &sc.serialize());
+        }
         self.refresh_slots();
         ok
     }
@@ -736,7 +1025,7 @@ impl App {
 
     /// the interface of the current screen; returns what the player pressed
     #[allow(clippy::too_many_arguments)]
-    fn layout(ctx: &egui::Context, screen: Screen, sv: &SlotsView, st: &mut save::Settings, prompt: Option<&Prompt>, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
+    fn layout(ctx: &egui::Context, screen: Screen, hud: &Hud, sv: &SlotsView, st: &mut save::Settings, prompt: Option<&Prompt>, info: &str, err: Option<&str>, apk: Option<&str>, joy: Option<(egui::Pos2, egui::Pos2)>, load: (f32, Option<&LoadView>), out: &mut Vec<Action>) {
         let shade = |ctx: &egui::Context, a: u8| {
             ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_rgba_unmultiplied(0x0d, 0x0b, 0x10, a));
         };
@@ -868,9 +1157,10 @@ impl App {
             Screen::Playing => {
                 if st.show_fps {
                     egui::Area::new(egui::Id::unique("fps")).anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 12.0)).order(egui::Order::Background).show(ctx, |ui| {
-                        ui.label(egui::RichText::new(format!("{:.0} FPS", sv.fps)).size(13.0).color(INK.gamma_multiply(0.7)));
+                        ui.add(egui::Label::new(egui::RichText::new(format!("{:.0} FPS", sv.fps)).size(13.0).color(INK.gamma_multiply(0.7))).extend());
                     });
                 }
+                story_hud(ctx, hud, out);
                 egui::Area::new(egui::Id::unique("pause")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 18.0)).show(ctx, |ui| {
                     let b = egui::Button::new("").min_size(egui::vec2(52.0, 52.0)).corner_radius(26.0);
                     let r = ui.add(b);
@@ -892,6 +1182,10 @@ impl App {
                     p.circle_filled(k, 22.0, egui::Color32::from_rgba_unmultiplied(242, 200, 121, 120));
                 }
             }
+            Screen::Bag => {
+                shade(ctx, 0xb0);
+                bag(ctx, hud, out);
+            }
             Screen::Paused => {
                 shade(ctx, 0xa0);
                 egui::Area::new(egui::Id::unique("paused")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
@@ -900,7 +1194,7 @@ impl App {
                         ui.add_space(6.0);
                         ui.spacing_mut().item_spacing.y = 6.0;
                         ui.spacing_mut().button_padding = egui::vec2(16.0, 4.0);
-                        for (t, act) in [("Продолжить", Action::Resume), ("Сохранить", Action::OpenSave), ("Загрузить", Action::OpenLoad), ("Настройки", Action::Settings), ("В главное меню", Action::ToMenu)] {
+                        for (t, act) in [("Продолжить", Action::Resume), ("Вещи", Action::OpenBag), ("Сохранить", Action::OpenSave), ("Загрузить", Action::OpenLoad), ("Настройки", Action::Settings), ("В главное меню", Action::ToMenu)] {
                             let b = egui::Button::new(egui::RichText::new(t).size(14.0)).min_size(egui::vec2(190.0, 30.0));
                             if ui.add(b).clicked() {
                                 out.push(act);
@@ -1066,7 +1360,7 @@ impl ApplicationHandler for App {
                     match self.screen {
                         Screen::Playing => self.act(Action::Pause, el),
                         Screen::Paused => self.act(Action::Resume, el),
-                        Screen::Settings | Screen::Load | Screen::Save => self.act(Action::Back, el),
+                        Screen::Settings | Screen::Load | Screen::Save | Screen::Bag => self.act(Action::Back, el),
                         _ => {}
                     }
                     return;
@@ -1079,6 +1373,14 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::KeyE) => 4,
                     PhysicalKey::Code(KeyCode::KeyQ) => 5,
                     PhysicalKey::Code(KeyCode::ShiftLeft) => 6,
+                    PhysicalKey::Code(KeyCode::KeyF) if event.state == ElementState::Pressed && self.screen == Screen::Playing => {
+                        self.act(Action::Use, el);
+                        return;
+                    }
+                    PhysicalKey::Code(KeyCode::KeyI) if event.state == ElementState::Pressed && self.screen == Screen::Playing => {
+                        self.act(Action::OpenBag, el);
+                        return;
+                    }
                     _ => return,
                 };
                 self.keys[k] = event.state == ElementState::Pressed;
@@ -1104,7 +1406,7 @@ impl App {
         let ppp = self.ui.as_ref().map_or(1.0, |u| u.ppp);
         let mut joy_vis = None;
         if let Some(h) = &mut self.hero {
-            if matches!(self.screen, Screen::Playing | Screen::Paused) {
+            if matches!(self.screen, Screen::Playing | Screen::Paused | Screen::Bag) {
                 let mut mv = [st, fw];
                 if let Some((_, s0, s1)) = h.joy {
                     // full speed at 9 % of the short side from where the finger landed
@@ -1114,7 +1416,7 @@ impl App {
                     mv = [x / l, y / l];
                     joy_vis = Some((egui::pos2(s0.0 as f32 / ppp, s0.1 as f32 / ppp), egui::pos2(s1.0 as f32 / ppp, s1.1 as f32 / ppp)));
                 }
-                if playing {
+                if playing && self.hud.panel.is_none() {
                     self.save_t += dt;
                     self.playtime += dt as f64;
                     let inp = Input { mv, look: h.look, run: self.keys[6] };
@@ -1130,11 +1432,20 @@ impl App {
             }
             if let (Some(rig), Some(w), Some(g)) = (&h.rig, &mut self.world, &self.gfx) {
                 h.words.clear();
-                if matches!(self.screen, Screen::Playing | Screen::Paused) {
+                if matches!(self.screen, Screen::Playing | Screen::Paused | Screen::Bag) {
                     write_rig(&mut h.words, rig, focus.to_array(), h.player.yaw, h.player.walking && playing, h.player.phase, h.player.speed, time);
                 }
                 w.set_dynamic(&g.queue, &h.words);
             }
+        }
+        if let (true, None, Some(sc), Some(h)) = (playing, &self.hud.panel, &self.script, &self.hero) {
+            let p = &h.player;
+            let (c, t) = (glam::Vec3::from(p.cam_pos), glam::Vec3::from(p.cam_target));
+            sc.tick(dt, p.pos, p.yaw, p.cam_pos, (t - c).normalize_or(glam::Vec3::Z).to_array());
+        }
+        self.story_events();
+        if self.hud.say.as_ref().is_some_and(|s| s.2 < self.start.elapsed().as_secs_f32()) {
+            self.hud.say = None;
         }
         if playing && self.save_t >= save::AUTOSAVE {
             self.autosave();
@@ -1165,10 +1476,11 @@ impl App {
             })
         };
         let (screen, err) = (self.screen, self.load_error.clone());
-        if self.toast.is_some_and(|(_, t)| t.elapsed().as_secs_f32() > 2.0) {
+        let hud = &self.hud;
+        if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed().as_secs_f32() > 2.5) {
             self.toast = None;
         }
-        let sv = SlotsView { rows: &self.slot_rows, confirm: self.confirm, toast: self.toast.map(|t| t.0), fps: self.fps };
+        let sv = SlotsView { rows: &self.slot_rows, confirm: self.confirm, toast: self.toast.as_ref().map(|t| t.0.as_str()), fps: self.fps };
         let mut st = self.settings;
         let lt = self.loading_frames as f32 / 30.0;
         let ls = self.loading.as_ref().and_then(|(s, _)| s.lock().ok().map(|s| (s.stage, s.frac, s.notes.clone())));
@@ -1176,7 +1488,7 @@ impl App {
         let (Some(g), Some(ui)) = (&mut self.gfx, &mut self.ui) else { return };
         let world = if screen == Screen::Loading { None } else { self.world.as_mut() };
         g.render(world, &self.cam, focus, time, SKY, |d, q, enc, view, w, h| {
-            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, &sv, &mut st, prompt.as_ref(), &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
+            ui.frame(d, q, enc, view, w, h, |ctx| Self::layout(ctx, screen, hud, &sv, &mut st, prompt.as_ref(), &info, err.as_deref(), apk.as_deref(), joy_vis, (lt, ls.as_ref()), &mut actions));
         });
         if st != self.settings {
             self.settings = st;

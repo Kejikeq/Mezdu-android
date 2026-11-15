@@ -143,3 +143,20 @@ pub fn read_settings(data: &Path) -> Settings {
 pub fn write_settings(data: &Path, s: &Settings) {
     let _ = std::fs::write(data.join("settings.txt"), format!("{} {} {}\n", s.sens, s.invert_y as u8, s.show_fps as u8));
 }
+
+/// The story's state of a slot (the scripts' chapter, flags, backpack, world edits) beside its save.
+pub fn read_story(data: &Path, slot: &str) -> Option<String> {
+    std::fs::read_to_string(data.join("save").join(format!("{slot}.story.json"))).ok()
+}
+
+pub fn write_story(data: &Path, slot: &str, json: &str) {
+    let p = data.join("save").join(format!("{slot}.story.json"));
+    let tmp = p.with_extension("tmp");
+    if std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &p)).is_err() {
+        log::warn!("story save {slot} failed");
+    }
+}
+
+pub fn delete_story(data: &Path, slot: &str) {
+    let _ = std::fs::remove_file(data.join("save").join(format!("{slot}.story.json")));
+}
