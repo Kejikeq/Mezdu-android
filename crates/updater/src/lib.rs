@@ -253,11 +253,19 @@ pub const PERIOD: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// For a background thread: checks now and then every PERIOD for as long as the game runs; `on_apk` gets the
 /// commit of a newer APK once.
+/// Set when this copy of the game library hands over to a newer one in the same process: its watch thread ends.
+pub static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn watch(data_dir: PathBuf, build: &'static str, abi: Option<&'static str>, on_apk: impl Fn(String)) {
     let mut told = false;
     loop {
         // the loading screen does the first check itself (update_now); this one starts a period later
-        std::thread::sleep(PERIOD);
+        for _ in 0..PERIOD.as_secs() {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if STOP.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+        }
         if let Some(c) = run(data_dir.clone(), build, abi) {
             if !told {
                 on_apk(c);

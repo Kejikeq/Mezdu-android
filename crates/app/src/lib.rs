@@ -292,19 +292,27 @@ fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
     }
 }
 
+/// the compact «Назад» of the settings and the slot screens
+fn back(ui: &mut egui::Ui, out: &mut Vec<Action>) {
+    let b = egui::Button::new(egui::RichText::new("Назад").size(15.0)).min_size(egui::vec2(160.0, 32.0));
+    if ui.add(b).clicked() {
+        out.push(Action::Back);
+    }
+}
+
 /// One slot as loadPanel draws it: the number large on the left, the chapter and the details beside it; true when
 /// tapped.
 fn slot_row(ui: &mut egui::Ui, label: &str, title: &str, meta: &str, enabled: bool) -> bool {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(340.0, 58.0), sense);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(300.0, 46.0), sense);
     let v = if enabled { ui.style().interact(&resp) } else { &ui.style().visuals.widgets.noninteractive };
     let p = ui.painter();
     p.rect(rect, 14.0, v.bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
     let fade = if enabled { 1.0 } else { 0.45 };
     let left = rect.left() + 18.0;
-    p.text(egui::pos2(left, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(26.0), ACCENT.gamma_multiply(fade));
-    p.text(egui::pos2(left + 38.0, rect.top() + 18.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(17.0), INK.gamma_multiply(fade));
-    p.text(egui::pos2(left + 38.0, rect.bottom() - 17.0), egui::Align2::LEFT_CENTER, meta, egui::FontId::proportional(13.0), INK.gamma_multiply(0.55 * fade));
+    p.text(egui::pos2(left, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(22.0), ACCENT.gamma_multiply(fade));
+    p.text(egui::pos2(left + 34.0, rect.top() + 15.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(15.0), INK.gamma_multiply(fade));
+    p.text(egui::pos2(left + 34.0, rect.bottom() - 13.0), egui::Align2::LEFT_CENTER, meta, egui::FontId::proportional(12.0), INK.gamma_multiply(0.55 * fade));
     enabled && resp.clicked()
 }
 
@@ -397,6 +405,8 @@ pub struct App {
     /// seconds of play in this game
     playtime: f64,
     settings: save::Settings,
+    /// the new game library took over: this event loop ends
+    quit: bool,
     /// a short message at the top («Сохранено») and when it was shown
     toast: Option<(&'static str, Instant)>,
     /// commit of a newer APK in the release, set by the updater thread
@@ -462,6 +472,7 @@ impl App {
             playtime: 0.0,
             toast: None,
             settings,
+            quit: false,
             apk,
             frames: 0,
             fps_t: Instant::now(),
@@ -516,12 +527,8 @@ impl App {
                 self.world = Some(l.world);
                 if self.screen == Screen::Loading {
                     self.screen = Screen::Menu;
-                    // the system closed the app during a game: it opens there again, paused
+                    // the menu first, always: «Продолжить» leads back into the game
                     self.refresh_slots();
-                    if let Some(s) = save::read(&self.data_dir, "auto").filter(|s| s.playing) {
-                        self.apply(&s);
-                        self.screen = Screen::Paused;
-                    }
                     // this library started and built the world: the launcher keeps it (crates/launcher)
                     let _ = std::fs::remove_file(self.data_dir.join("code").join("booting"));
                 }
@@ -530,8 +537,14 @@ impl App {
                 #[cfg(target_os = "android")]
                 if let Some(app) = ANDROID.get() {
                     // SAFETY: pointers of the running activity, valid while the app runs
-                    if let Err(e) = unsafe { url::restart(app.vm_as_ptr(), app.activity_as_ptr()) } {
-                        log::error!("restart: {e}");
+                    match unsafe { url::relaunch(app.vm_as_ptr(), app.activity_as_ptr()) } {
+                        Ok(()) => {
+                            // this copy steps aside: its event loop ends (the next frame), its updater thread too
+                            mezdu_updater::STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+                            self.quit = true;
+                            return;
+                        }
+                        Err(e) => log::error!("relaunch: {e}"),
                     }
                 }
                 // no restart (desktop, or it failed): the old library goes on, the new one starts next time
@@ -756,19 +769,28 @@ impl App {
                 m.add_triangle(3, 5, 4);
                 ctx.layer_painter(egui::LayerId::background()).add(egui::Shape::mesh(m));
                 egui::Area::new(egui::Id::unique("menu")).anchor(egui::Align2::LEFT_CENTER, egui::vec2(48.0, 0.0)).show(ctx, |ui| {
-                    ui.label(egui::RichText::new("воксельный психологический триллер").size(14.0).color(ACCENT));
-                    logo(ui, 52.0, load.0);
-                    ui.label(egui::RichText::new("Мир помнит то, что ты забыл.").size(16.0).italics().color(INK.gamma_multiply(0.75)));
-                    ui.add_space(22.0);
+                    // compact: a phone in landscape has about 390 points of height
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().button_padding = egui::vec2(18.0, 4.0);
+                    ui.label(egui::RichText::new("воксельный психологический триллер").size(12.0).color(ACCENT));
+                    logo(ui, 38.0, load.0);
+                    ui.label(egui::RichText::new("Мир помнит то, что ты забыл.").size(13.0).italics().color(INK.gamma_multiply(0.75)));
+                    ui.add_space(10.0);
+                    let item = |ui: &mut egui::Ui, text: &str, enabled: bool, act: Action, out: &mut Vec<Action>| {
+                        let b = egui::Button::new(egui::RichText::new(text).size(15.0)).min_size(egui::vec2(220.0, 32.0));
+                        if ui.add_enabled(enabled, b).clicked() {
+                            out.push(act);
+                        }
+                    };
                     let any = sv.rows.iter().any(Option::is_some);
                     if any {
-                        big(ui, "Продолжить", true, Action::Continue, out);
+                        item(ui, "Продолжить", true, Action::Continue, out);
                     }
-                    big(ui, "Начать игру", true, Action::NewGame, out);
-                    big(ui, "Загрузить", any, Action::OpenLoad, out);
-                    big(ui, "Настройки", true, Action::Settings, out);
+                    item(ui, "Начать игру", true, Action::NewGame, out);
+                    item(ui, "Загрузить", any, Action::OpenLoad, out);
+                    item(ui, "Настройки", true, Action::Settings, out);
                     #[cfg(not(target_os = "android"))]
-                    big(ui, "Выход", true, Action::Quit, out);
+                    item(ui, "Выход", true, Action::Quit, out);
                     if let Some(c) = apk {
                         ui.add_space(16.0);
                         ui.label(egui::RichText::new(format!("Доступна новая версия приложения ({c})")).color(ACCENT));
@@ -795,7 +817,7 @@ impl App {
                         ui.checkbox(&mut st.invert_y, egui::RichText::new("Инвертировать обзор по вертикали").size(15.0));
                         ui.checkbox(&mut st.show_fps, egui::RichText::new("Показывать FPS").size(15.0));
                         ui.add_space(14.0);
-                        big(ui, "Назад", true, Action::Back, out);
+                        back(ui, out);
                     });
                 });
             }
@@ -847,11 +869,12 @@ impl App {
                 shade(ctx, 0xb0);
                 let saving = screen == Screen::Save;
                 egui::Area::new(egui::Id::unique("slots")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
-                    egui::Frame::window(ui.style()).inner_margin(24.0).corner_radius(18.0).show(ui, |ui| {
+                    egui::Frame::window(ui.style()).inner_margin(18.0).corner_radius(18.0).show(ui, |ui| {
                         // room for the «Удалить · Нет» of a deletion: the window does not jump when it shows
-                        ui.set_width(520.0);
-                        ui.label(egui::RichText::new(if saving { "Сохранить" } else { "Загрузить" }).size(28.0).strong());
-                        ui.add_space(6.0);
+                        ui.set_width(440.0);
+                        ui.label(egui::RichText::new(if saving { "Сохранить" } else { "Загрузить" }).size(22.0).strong());
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.spacing_mut().button_padding = egui::vec2(14.0, 4.0);
                         // loadPanel of the web game: the autosave «А» only to load from, slots 1-3 both ways
                         for (i, row) in sv.rows.iter().enumerate() {
                             if saving && i == 0 {
@@ -879,8 +902,8 @@ impl App {
                                 }
                             });
                         }
-                        ui.add_space(10.0);
-                        big(ui, "Назад", true, Action::Back, out);
+                        ui.add_space(4.0);
+                        back(ui, out);
                     });
                 });
             }
@@ -1027,6 +1050,10 @@ impl App {
         let dt = self.last.elapsed().as_secs_f32().min(0.1);
         self.last = Instant::now();
         self.poll_loading();
+        if self.quit {
+            el.exit();
+            return;
+        }
         self.loading_frames += 1;
         let time = self.frozen.unwrap_or_else(|| self.start.elapsed().as_secs_f32());
         let size = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
