@@ -307,7 +307,13 @@ impl App {
         match a {
             Action::NewGame => {
                 if let Some(h) = &mut self.hero {
-                    h.player.spawn(&h.vox, SPAWN[0], SPAWN[2], SPAWN[1], SPAWN[3]);
+                    // MEZDU_HERO=x,z (metres): desktop check of a place in the world
+                    let at = std::env::var("MEZDU_HERO").ok().and_then(|v| {
+                        let (x, z) = v.split_once(',')?;
+                        Some((x.parse::<f32>().ok()?, z.parse::<f32>().ok()?))
+                    });
+                    let (x, z) = at.unwrap_or((SPAWN[0], SPAWN[2]));
+                    h.player.spawn(&h.vox, x, z, SPAWN[1], SPAWN[3]);
                     log::info!("new game: hero at {:.2?}", h.player.pos);
                     self.screen = Screen::Playing;
                 }

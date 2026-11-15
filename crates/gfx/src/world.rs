@@ -53,6 +53,9 @@ struct Draw {
     opaque: u32,
     leaves: u32,
     leaf_base: u32,
+    /// first quad and quad count of the water of this macro-chunk (drawn non-indexed: 6 vertices per quad)
+    water_base: u32,
+    water: u32,
 }
 
 #[derive(Default)]
@@ -79,6 +82,7 @@ pub struct World {
     casc: [Cascade; 2],
     p_terrain: wgpu::RenderPipeline,
     p_leaf: wgpu::RenderPipeline,
+    p_water: wgpu::RenderPipeline,
     p_shadow: wgpu::RenderPipeline,
     p_shadow_leaf: wgpu::RenderPipeline,
     p_comp: wgpu::RenderPipeline,
@@ -346,6 +350,7 @@ impl World {
         for f in m.of_kind("mesh") {
             for mm in MacroMesh::parse_tile(&pack.read_data(&f.path)?)? {
                 let base = (fw.len() / 3) as u32;
+                let water_base = base + (mm.faces.len() / 3) as u32;
                 draws.push(Draw {
                     cx: (mm.mcx * 64 + 32) as f32 * c.VS,
                     cz: (mm.mcz * 64 + 32) as f32 * c.VS,
@@ -353,8 +358,11 @@ impl World {
                     opaque: mm.c0[0] + mm.c0[1],
                     leaves: mm.c0[3] + mm.c0[4],
                     leaf_base: base + mm.c0[0] + mm.c0[1] + mm.c0[2],
+                    water_base,
+                    water: (mm.water.len() / 3) as u32,
                 });
                 fw.extend_from_slice(&mm.faces);
+                fw.extend_from_slice(&mm.water);
             }
         }
         if fw.is_empty() {
@@ -467,6 +475,33 @@ impl World {
         let p_leaf = pipe("leaf0", "vsTerrain", Some("fsLeaf"), None, false);
         let p_shadow = pipe("shadow", "vsShadow", None, Some(wgpu::Face::Back), true);
         let p_shadow_leaf = pipe("shadowL0", "vsShadow", Some("fsShadowLeaf"), None, true);
+        // water: premultiplied alpha over the scene (renderer.js 'water0'), depth written so reflections see it
+        let p_water = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("water0"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &world, entry_point: Some("vsWater"), compilation_options: opts(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &world,
+                entry_point: Some("fsWater"),
+                compilation_options: opts(),
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: HDR,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+                            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(GBUF.into()),
+                ],
+            }),
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH, depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Less), stencil: Default::default(), bias: Default::default() }),
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache,
+        });
 
         // screen-space occlusion (half resolution) and reflections (quarter): renderer.js screenSpacePasses
         let aom = module(d, pack, "ao")?;
@@ -503,7 +538,8 @@ impl World {
             lut: lutv.clone(),
             lin_smp: d.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() }),
         };
-        log::info!("world: {} macro chunks, {} quads, exposure {:.2}", draws.len(), quads, frame[132]);
+        let water_quads: u32 = draws.iter().map(|d| d.water).sum();
+        log::info!("world: {} macro chunks, {} quads, {} water quads, exposure {:.2}", draws.len(), quads, water_quads, frame[132]);
         Ok(World {
             frame_c1: frame.clone(),
             frame,
@@ -518,6 +554,7 @@ impl World {
             casc: Default::default(),
             p_terrain,
             p_leaf,
+            p_water,
             p_shadow,
             p_shadow_leaf,
             p_comp,
@@ -843,6 +880,14 @@ impl World {
             for (dr, _) in self.draws.iter().zip(&self.draw_vis).filter(|(_, v)| **v) {
                 if dr.leaves > 0 {
                     p.draw_indexed(0..dr.leaves * 6, (dr.leaf_base * 4) as i32, 0..1);
+                    self.calls += 1;
+                }
+            }
+            p.set_pipeline(&self.p_water);
+            for (dr, _) in self.draws.iter().zip(&self.draw_vis).filter(|(_, v)| **v) {
+                if dr.water > 0 {
+                    let (a, b) = (dr.water_base * 6, (dr.water_base + dr.water) * 6);
+                    p.draw(a..b, 0..1);
                     self.calls += 1;
                 }
             }

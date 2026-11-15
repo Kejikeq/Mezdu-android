@@ -148,6 +148,8 @@ pub struct MacroMesh {
     pub c0: [u32; 6],
     /// 3 u32 per quad, groups in the order of `c0`
     pub faces: Vec<u32>,
+    /// water quads of the macro-chunk (3 u32 per quad, drawn by vsWater)
+    pub water: Vec<u32>,
 }
 
 impl MacroMesh {
@@ -167,7 +169,8 @@ impl MacroMesh {
             if end > w.len() {
                 return Err("mesh: truncated faces".into());
             }
-            out.push(MacroMesh { mcx: w[i], mcz: w[i + 1], c0, faces: w[f0..f0 + nq * 3].to_vec() });
+            let water = w[f0 + nq * 3..end].to_vec();
+            out.push(MacroMesh { mcx: w[i], mcz: w[i + 1], c0, faces: w[f0..f0 + nq * 3].to_vec(), water });
             i = end;
         }
         Ok(out)
