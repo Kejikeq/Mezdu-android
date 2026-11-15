@@ -82,7 +82,13 @@ fn world_frame(ws: &mezdu_script::WorldState) -> mezdu_gfx::world::WorldFrame {
 enum Panel {
     Read { id: u32, title: String, paras: Vec<String>, night: bool },
     Inspect { id: u32, kicker: String, title: String, desc: String, buttons: Vec<(String, serde_json::Value)> },
+    /// a conversation with a witness (story/dialogue.js)
+    Dialog { id: u32, role: String, name: String, context: String, speech: String, questions: Vec<(String, bool)>, testimony: mezdu_script::Testimony },
 }
+
+/// the buttons of a conversation beside its questions (Action::Answer indices)
+const DIALOG_RECORD: usize = 1000;
+const DIALOG_LEAVE: usize = 1001;
 
 /// What the story shows over the game.
 #[derive(Default)]
@@ -451,6 +457,42 @@ fn story_hud(ctx: &egui::Context, hud: &Hud, out: &mut Vec<Action>) {
                         out.push(Action::Answer(*id, 0));
                     }
                 }
+                Panel::Dialog { id, role, name, context, speech, questions, testimony } => {
+                    ui.label(egui::RichText::new(role).size(11.0).color(ACCENT));
+                    ui.label(egui::RichText::new(name).size(19.0).strong());
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        ui.label(egui::RichText::new(context).size(13.0).italics().color(INK.gamma_multiply(0.7)));
+                        egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(25, 33, 48, 0xc0)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                            ui.label(egui::RichText::new(speech).size(14.0).color(INK));
+                        });
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Вопросы для выяснения правды:").size(11.0).color(INK.gamma_multiply(0.55)));
+                        for (k, (q, asked)) in questions.iter().enumerate() {
+                            // (the interface font has no ✓ / ▸ of the web: asked ones are grey and marked in words)
+                            let t = if *asked { egui::RichText::new(format!("— {q} (спрошено)")).size(13.0).color(INK.gamma_multiply(0.55)) } else { egui::RichText::new(format!("— {q}")).size(13.0).color(ACCENT) };
+                            if ui.add(egui::Button::new(t).wrap().min_size(egui::vec2(ui.available_width(), 30.0))).clicked() {
+                                out.push(Action::Answer(*id, k));
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        match testimony {
+                            mezdu_script::Testimony::Offer => {
+                                if ui.add(egui::Button::new(egui::RichText::new("Записать показание").size(14.0).color(ACCENT)).min_size(egui::vec2(170.0, 32.0))).clicked() {
+                                    out.push(Action::Answer(*id, DIALOG_RECORD));
+                                }
+                            }
+                            mezdu_script::Testimony::Recorded => {
+                                ui.label(egui::RichText::new("Показание записано").size(13.0).color(INK.gamma_multiply(0.6)));
+                            }
+                            mezdu_script::Testimony::None => {}
+                        }
+                        if ui.add(egui::Button::new(egui::RichText::new("Отойти").size(14.0)).min_size(egui::vec2(110.0, 32.0))).clicked() {
+                            out.push(Action::Answer(*id, DIALOG_LEAVE));
+                        }
+                    });
+                }
                 Panel::Inspect { id, kicker, title, desc, buttons } => {
                     if !kicker.is_empty() {
                         ui.label(egui::RichText::new(kicker).size(12.0).color(ACCENT));
@@ -490,7 +532,7 @@ fn bag(ctx: &egui::Context, hud: &Hud, out: &mut Vec<Action>) {
                         ui.set_width(w * 0.38);
                         egui::ScrollArea::vertical().id_salt("items").max_height(240.0).show(ui, |ui| {
                             for (i, it) in hud.items.iter().enumerate() {
-                                let t = egui::RichText::new(if it.seen { it.name.clone() } else { format!("• {}", it.name) }).size(13.0);
+                                let t = egui::RichText::new(if it.seen { it.name.clone() } else { format!("{} (новое)", it.name) }).size(13.0);
                                 let t = if i == hud.sel { t.color(ACCENT) } else { t };
                                 if ui.add(egui::Button::new(t).wrap().min_size(egui::vec2(w * 0.36, 30.0))).clicked() {
                                     out.push(Action::Item(i));
@@ -879,6 +921,11 @@ impl App {
             Action::Answer(id, k) => {
                 let v = match &self.hud.panel {
                     Some(Panel::Inspect { id: pid, buttons, .. }) if *pid == id => buttons.get(k).map(|b| b.1.clone()).unwrap_or(serde_json::Value::Bool(false)),
+                    Some(Panel::Dialog { id: pid, .. }) if *pid == id => match k {
+                        DIALOG_RECORD => serde_json::json!({ "record": true }),
+                        DIALOG_LEAVE => serde_json::json!({ "leave": true }),
+                        k => serde_json::json!({ "ask": k }),
+                    },
                     _ => serde_json::Value::Bool(true),
                 };
                 self.hud.panel = None;
@@ -983,6 +1030,7 @@ impl App {
                 E::Prompt { label, .. } => self.hud.prompt = label,
                 E::Read { id, title, paras, night } => self.hud.panel = Some(Panel::Read { id, title, paras, night }),
                 E::Inspect { id, kicker, title, desc, buttons, .. } => self.hud.panel = Some(Panel::Inspect { id, kicker, title, desc, buttons }),
+                E::Dialog { id, role, name, context, speech, questions, testimony } => self.hud.panel = Some(Panel::Dialog { id, role, name, context, speech, questions, testimony }),
                 E::Prop { model, pos, on } => {
                     if let (Some(w), Some(g)) = (&mut self.world, &self.gfx) {
                         w.set_prop_visible(&g.queue, &model, pos, on);

@@ -30,6 +30,8 @@ pub enum Event {
     Read { id: u32, title: String, paras: Vec<String>, night: bool },
     /// a thing to look at with its buttons (label, value); answered with the value pressed
     Inspect { id: u32, item: String, kicker: String, title: String, desc: String, buttons: Vec<(String, serde_json::Value)> },
+    /// a conversation with a witness (story/dialogue.js): answered with {"ask": i}, {"record": true} or {"leave": true}
+    Dialog { id: u32, role: String, name: String, context: String, speech: String, questions: Vec<(String, bool)>, testimony: Testimony },
     /// a story prop shown or hidden (model name, position)
     Prop { model: String, pos: [f32; 3], on: bool },
     /// the hero put somewhere; `safe`: on ground near there where the whole body fits (main.js placeSafe)
@@ -80,6 +82,14 @@ pub struct WorldState {
     pub headache: f32,
     /// a cinematic or a collapse holds the hero (no walking)
     pub locked: bool,
+}
+
+/// The testimony button of a conversation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Testimony {
+    None,
+    Offer,
+    Recorded,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -323,6 +333,19 @@ fn event(e: &serde_json::Value) -> Option<Event> {
             desc: s("desc"),
             buttons: e["buttons"].as_array()?.iter().map(|b| (b[0].as_str().unwrap_or("").to_string(), b[1].clone())).collect(),
         },
+        "dialog" => Event::Dialog {
+            id,
+            role: s("role"),
+            name: s("name"),
+            context: s("context"),
+            speech: s("speech"),
+            questions: e["questions"].as_array()?.iter().map(|q| (q[0].as_str().unwrap_or("").to_string(), q[1].as_bool().unwrap_or(false))).collect(),
+            testimony: match e["testimony"].as_str().unwrap_or("") {
+                "offer" => Testimony::Offer,
+                "recorded" => Testimony::Recorded,
+                _ => Testimony::None,
+            },
+        },
         "prop" => Event::Prop { model: s("model"), pos: p("p"), on: e["on"].as_bool().unwrap_or(true) },
         "teleport" => Event::Teleport { pos: p("p"), yaw: f("yaw"), safe: e["safe"].as_bool().unwrap_or(false) },
         "fade" => Event::Fade { to: f("to"), dur: f("dur") },
@@ -523,5 +546,59 @@ mod path {
         assert!(max_h > 0.9 && said && faded, "headache {max_h}, said {said}, faded {faded}");
         let p = back.expect("put back on the path");
         assert!((p[0] - far[0]).hypot(p[2] - far[2]) > 5.0, "{p:?}");
+    }
+}
+
+#[cfg(test)]
+mod dialogue {
+    use super::*;
+
+    struct Flat;
+    impl World for Flat {
+        fn solid(&self, _x: i32, y: i32, _z: i32, _w: u8) -> bool {
+            y < 0
+        }
+        fn hazard(&self, _x: f32, _y: f32, _z: f32, _w: u8) -> bool {
+            false
+        }
+        fn ground(&self, _x: f32, _z: f32) -> f32 {
+            7.0
+        }
+    }
+
+    /// A witness of chapter 1: the conversation opens, a question changes what they say, the testimony is recorded,
+    /// «Отойти» ends it (story/dialogue.js through G.ui.dialog): MEZDU_PACK=<pack> cargo test -p mezdu-script
+    #[test]
+    fn a_witness_talks() {
+        let Ok(dir) = std::env::var("MEZDU_PACK") else { return };
+        let pack = mezdu_core::Pack::open(&dir).unwrap();
+        let s = Script::new(sources(&pack).unwrap(), Rc::new(Flat)).unwrap();
+        s.new_game();
+        s.drain();
+        let pos = s.ctx.with(|ctx| ctx.eval::<Vec<f64>, _>("G.interactables.find(i => String(typeof i.label === 'function' ? i.label() : i.label).includes('Анна')).pos").unwrap());
+        let (x, y, z) = (pos[0] as f32, pos[1] as f32, pos[2] as f32);
+        let feet = [x - 0.6, y - 1.0, z];
+        let fwd = [1.0, 0.0, 0.0];
+        s.tick(0.1, feet, std::f32::consts::FRAC_PI_2, [x - 3.0, y + 1.0, z], fwd, false, true);
+        assert!(s.drain().iter().any(|e| matches!(e, Event::Prompt { label, .. } if label.contains("Анна"))));
+        s.act();
+        let next = |s: &Script| loop {
+            s.tick(0.1, feet, 1.57, [x - 3.0, y + 1.0, z], fwd, false, true);
+            if let Some(d) = s.drain().into_iter().find(|e| matches!(e, Event::Dialog { .. })) {
+                return d;
+            }
+        };
+        let Event::Dialog { id, speech: first, questions, testimony, .. } = next(&s) else { unreachable!() };
+        assert!(!questions.is_empty() && testimony == Testimony::Offer);
+        s.answer(id, &serde_json::json!({ "ask": 0 }));
+        let Event::Dialog { id, speech, questions, .. } = next(&s) else { unreachable!() };
+        assert_ne!(speech, first, "the answer is shown");
+        assert!(questions[0].1, "the question is ticked");
+        s.answer(id, &serde_json::json!({ "record": true }));
+        let Event::Dialog { id, testimony, .. } = next(&s) else { unreachable!() };
+        assert_eq!(testimony, Testimony::Recorded);
+        s.answer(id, &serde_json::json!({ "leave": true }));
+        s.tick(0.1, feet, 1.57, [x - 3.0, y + 1.0, z], fwd, false, true);
+        assert!(!s.world().locked, "the hero walks again");
     }
 }

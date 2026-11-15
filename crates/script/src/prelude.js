@@ -48,6 +48,8 @@ const ui = quiet({
   read: (paras, night, sig) => ask({ t: 'read', paras: [].concat(paras).map(String), night: !!night, title: sig || '' }),
   inspect: (o) => ask({ t: 'inspect', title: o.title || '', desc: o.desc || '', kicker: o.kicker || '', item: o.item || '', buttons: (o.buttons || [{ label: 'Закрыть', value: true }]).map((b) => [b.label, b.value]) }),
   toast: (text) => emit({ t: 'toast', text: String(text) }),
+  // story/dialogue.js: a view of a conversation; answered with { ask: i } | { record: true } | { leave: true }
+  dialog: (v) => ask({ t: 'dialog', role: String(v.role || ''), name: String(v.name || ''), context: String(v.context || ''), speech: String(v.speech || ''), questions: (v.questions || []).map((q) => [String(q.q), !!q.asked]), testimony: v.testimony || '' }),
   cineLine: (text, dur, who) => say(text, dur || 4, who),
   chapterCard: (n, title) => say(title ? `Глава ${n}. ${title}` : `Глава ${n}`, 4),
   say: (text, dur, night, who) => say(text, dur, who),
