@@ -1,6 +1,7 @@
 # 1) builds libmezdu.so (arm64-v8a + x86_64) from crates/ and commits it to app/src/main/jniLibs on main,
 #    so Gradle builds without Rust (AI Studio syncs main and packs the current engine);
-# 2) builds the APK with Gradle and publishes it as release "app".
+# 2) builds the APK with Gradle and publishes it as release "app", with the game library of each ABI
+#    (libmezdu-<abi>.so.zst + code-<abi>.json): installed APKs download it instead of a new APK.
 name: android
 on:
   push:
@@ -39,6 +40,8 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           export MEZDU_BUILD="${GITHUB_SHA::7}" # the APK compares it with apk-version.txt of the release
           cargo ndk -t arm64-v8a -t x86_64 -P 26 -o app/src/main/jniLibs build --release -p mezdu-app --lib
+          # the launcher (entry of the APK) starts the downloaded libmezdu.so or the bundled one
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 -o app/src/main/jniLibs build --release -p mezdu-launcher --lib
           ls -la app/src/main/jniLibs/*
       - name: commit native libs to main
         if: github.ref == 'refs/heads/main'
@@ -85,3 +88,18 @@ jobs:
           files: |
             out/mezhdu.apk
             out/apk-version.txt
+      - name: game library for code updates
+        # code-<abi>.json last: a phone sees it only when the library it names is already there
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          L=$(sed -n 's/^pub const LAUNCHER: u32 = \([0-9]*\);/\1/p' crates/launcher/src/lib.rs)
+          mkdir -p code
+          for abi in arm64-v8a x86_64; do
+            so=app/src/main/jniLibs/$abi/libmezdu.so
+            zstd -19 -q -f "$so" -o code/libmezdu-$abi.so.zst
+            printf '{"build":"%s","sha256":"%s","size":%d,"launcher":%d}\n' "${GITHUB_SHA::7}" "$(sha256sum "$so" | cut -d' ' -f1)" "$(stat -c%s "$so")" "$L" > code/code-$abi.json
+          done
+          cat code/*.json
+          gh release upload app code/*.so.zst --clobber -R "$GITHUB_REPOSITORY"
+          gh release upload app code/*.json --clobber -R "$GITHUB_REPOSITORY"

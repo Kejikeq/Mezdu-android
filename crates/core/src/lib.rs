@@ -68,6 +68,13 @@ pub fn asset_name(path: &str) -> String {
     path.replace('/', "__")
 }
 
+/// zstd-compressed bytes (pack files, the downloadable game library)
+pub fn unzstd(raw: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    ruzstd::decoding::StreamingDecoder::new(raw).map_err(|e| e.to_string())?.read_to_end(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -92,12 +99,7 @@ impl Pack {
         if !path.ends_with(".zst") {
             return Ok(raw);
         }
-        let mut out = Vec::new();
-        ruzstd::decoding::StreamingDecoder::new(&raw[..])
-            .map_err(|e| format!("{path}: {e}"))?
-            .read_to_end(&mut out)
-            .map_err(|e| format!("{path}: {e}"))?;
-        Ok(out)
+        unzstd(&raw).map_err(|e| format!("{path}: {e}"))
     }
     /// Files whose size or sha256 differ from the manifest.
     pub fn verify(&self) -> Vec<String> {

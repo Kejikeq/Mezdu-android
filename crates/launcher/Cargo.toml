@@ -1,0 +1,11 @@
+[package]
+name = "mezdu-launcher"
+version.workspace = true
+edition.workspace = true
+
+# The library Android's NativeActivity starts (lib_name in AndroidManifest.xml). It only chooses the game library
+# (the one in the APK or a newer one the game downloaded) and hands the activity over to it. No dependencies:
+# it changes rarely, so the APK changes rarely.
+[lib]
+name = "mezdu_launcher"
+crate-type = ["cdylib", "rlib"]

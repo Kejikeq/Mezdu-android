@@ -1255,6 +1255,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mezdu-launcher"
+version = "0.1.0"
+
+[[package]]
 name = "mezdu-ui"
 version = "0.1.0"
 dependencies = [

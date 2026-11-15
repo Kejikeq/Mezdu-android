@@ -95,6 +95,19 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
     } else {
         note(0, "пак задан вручную (MEZDU_PACK)".into());
     }
+    // the game library itself: a newer one is downloaded now and starts with the next launch
+    if let (Some(abi), false) = (ABI, BUILD.is_empty()) {
+        let prev = st.lock().map(|s| s.notes[0].clone()).unwrap_or_default();
+        match mezdu_updater::check_code(&data_dir, abi, BUILD, &|done, total| note(0, format!("{prev}; программа: {} из {}", mb(done), mb(total)))) {
+            Ok(mezdu_updater::CodeOutcome::Staged { build, .. }) => note(0, format!("{prev}; программа {build} скачана, заработает при следующем запуске")),
+            Ok(mezdu_updater::CodeOutcome::NeedApk { build }) => note(0, format!("{prev}; программа {build} требует установить новый APK")),
+            Ok(mezdu_updater::CodeOutcome::UpToDate) => note(0, prev),
+            Err(e) => {
+                log::warn!("code update: {e}");
+                note(0, prev);
+            }
+        }
+    }
     // 2. integrity: every file against the manifest's sha256; broken ones are downloaded again
     set(1, 0.0);
     let dir = fixed.unwrap_or_else(|| data_dir.join("pack"));
@@ -293,6 +306,8 @@ impl App {
                 self.world = Some(l.world);
                 if self.screen == Screen::Loading {
                     self.screen = Screen::Menu;
+                    // this library started and built the world: the launcher keeps it (crates/launcher)
+                    let _ = std::fs::remove_file(self.data_dir.join("code").join("booting"));
                 }
             }
             Err(e) => {
@@ -753,6 +768,17 @@ pub const BUILD: &str = match option_env!("MEZDU_BUILD") {
     None => "",
 };
 
+/// ABI of the downloadable game library (release "app": libmezdu-<abi>.so.zst); none on the desktop
+pub const ABI: Option<&str> = if cfg!(not(target_os = "android")) {
+    None
+} else if cfg!(target_arch = "aarch64") {
+    Some("arm64-v8a")
+} else if cfg!(target_arch = "x86_64") {
+    Some("x86_64")
+} else {
+    None
+};
+
 pub fn run(event_loop: EventLoop<()>, data_dir: PathBuf) {
     event_loop.set_control_flow(ControlFlow::Wait);
     let apk = Arc::new(Mutex::new(None));
@@ -762,7 +788,7 @@ pub fn run(event_loop: EventLoop<()>, data_dir: PathBuf) {
         mezdu_updater::install_staged(&data_dir);
         let (dir, slot) = (data_dir.clone(), apk.clone());
         let _ = std::thread::Builder::new().name("updater".into()).spawn(move || {
-            mezdu_updater::watch(dir, BUILD, move |c| {
+            mezdu_updater::watch(dir, BUILD, ABI, move |c| {
                 log::info!("a newer APK ({c}) is available");
                 if let Ok(mut s) = slot.lock() {
                     *s = Some(c);

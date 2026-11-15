@@ -4,7 +4,7 @@
 //! or return from the background), so the game never reads a half-downloaded pack.
 //! Kinds the remote pack lacks (models: only a headless game run can export the instances) are kept from the
 //! current pack; a remote pack that lacks any other kind the current one has (an older export format) is skipped.
-use mezdu_core::{asset_name, sha256_hex, Manifest, Pack};
+use mezdu_core::{asset_name, sha256_hex, unzstd, Manifest, Pack};
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -212,12 +212,12 @@ pub const PERIOD: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// For a background thread: checks now and then every PERIOD for as long as the game runs; `on_apk` gets the
 /// commit of a newer APK once.
-pub fn watch(data_dir: PathBuf, build: &'static str, on_apk: impl Fn(String)) {
+pub fn watch(data_dir: PathBuf, build: &'static str, abi: Option<&'static str>, on_apk: impl Fn(String)) {
     let mut told = false;
     loop {
         // the loading screen does the first check itself (update_now); this one starts a period later
         std::thread::sleep(PERIOD);
-        if let Some(c) = run(data_dir.clone(), build) {
+        if let Some(c) = run(data_dir.clone(), build, abi) {
             if !told {
                 on_apk(c);
                 told = true;
@@ -226,13 +226,30 @@ pub fn watch(data_dir: PathBuf, build: &'static str, on_apk: impl Fn(String)) {
     }
 }
 
-/// One check: pack first, then the APK.
-pub fn run(data_dir: PathBuf, build: &'static str) -> Option<String> {
+/// One check: pack first, then the code: with an ABI the game library (a new APK only when its launcher is too
+/// old), without one the APK.
+pub fn run(data_dir: PathBuf, build: &'static str, abi: Option<&str>) -> Option<String> {
     match check_pack(&data_dir) {
         Ok(Outcome::UpToDate) => log::info!("updater: pack is up to date"),
         Ok(Outcome::Staged { commit, downloaded, dropped }) => log::info!("updater: pack {commit} staged ({downloaded} files downloaded, {dropped} dropped), installed at the next loading"),
         Ok(Outcome::Skipped(why)) => log::info!("updater: skipped: {why}"),
         Err(e) => log::warn!("updater: pack: {e}"),
+    }
+    if let Some(abi) = abi {
+        if build.is_empty() {
+            return None;
+        }
+        return match check_code(&data_dir, abi, build, &|_, _| {}) {
+            Ok(CodeOutcome::NeedApk { build }) => Some(build),
+            Ok(o) => {
+                log::info!("updater: code {o:?}");
+                None
+            }
+            Err(e) => {
+                log::warn!("updater: code: {e}");
+                None
+            }
+        };
     }
     match newer_apk(build) {
         Ok(Some(c)) => {
@@ -245,4 +262,58 @@ pub fn run(data_dir: PathBuf, build: &'static str) -> Option<String> {
             None
         }
     }
+}
+
+/// Base of the release "app": the APK and the game library for each ABI.
+pub const APP_URL: &str = "https://github.com/Kejikeq/Mezdu-android/releases/download/app/";
+
+#[derive(Debug, PartialEq)]
+pub enum CodeOutcome {
+    UpToDate,
+    /// a newer game library waits in code/ and starts with the next launch
+    Staged { build: String, bytes: u64 },
+    /// the newer build needs a newer launcher (or this APK has none): the APK itself must be installed
+    NeedApk { build: String },
+}
+
+/// The game library of this device's ABI against `code-<abi>.json` of the release
+/// ({ build, sha256, size, launcher }): a newer one is downloaded (`libmezdu-<abi>.so.zst`), checked, written
+/// read-only to code/libmezdu.so and marked by code/build.txt for the launcher (crates/launcher).
+pub fn check_code(data_dir: &Path, abi: &str, running: &str, progress: &dyn Fn(u64, u64)) -> Result<CodeOutcome, String> {
+    let j: serde_json::Value = serde_json::from_slice(&get(&format!("{APP_URL}code-{abi}.json"), 4096)?).map_err(|e| e.to_string())?;
+    let build = j["build"].as_str().unwrap_or("").to_string();
+    let (sha, size, need) = (j["sha256"].as_str().unwrap_or(""), j["size"].as_u64().unwrap_or(0), j["launcher"].as_u64().unwrap_or(1));
+    let code = data_dir.join("code");
+    if build.is_empty() || build == running {
+        return Ok(CodeOutcome::UpToDate);
+    }
+    let installed: u64 = std::fs::read_to_string(code.join("launcher.txt")).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
+    if installed < need {
+        return Ok(CodeOutcome::NeedApk { build });
+    }
+    if std::fs::read_to_string(code.join("build.txt")).map(|b| b.trim() == build).unwrap_or(false) && code.join("libmezdu.so").exists() {
+        return Ok(CodeOutcome::Staged { build, bytes: 0 });
+    }
+    progress(0, size);
+    let packed = get(&format!("{APP_URL}libmezdu-{abi}.so.zst"), 64 << 20)?;
+    progress(packed.len() as u64, packed.len() as u64);
+    let lib = unzstd(&packed)?;
+    if sha256_hex(&lib) != sha || lib.len() as u64 != size {
+        return Err("game library: hash mismatch".into());
+    }
+    std::fs::create_dir_all(&code).map_err(|e| e.to_string())?;
+    // the launcher takes the library only with build.txt: away while the library is replaced
+    let _ = std::fs::remove_file(code.join("build.txt"));
+    let tmp = code.join("libmezdu.so.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, &lib).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Android 14+ loads dynamically delivered code only from read-only files
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, code.join("libmezdu.so")).map_err(|e| e.to_string())?;
+    std::fs::write(code.join("build.txt"), &build).map_err(|e| e.to_string())?;
+    Ok(CodeOutcome::Staged { build, bytes: packed.len() as u64 })
 }
