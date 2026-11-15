@@ -47,8 +47,11 @@ struct Hero {
 /// The voxels as the story scripts ask about them (mezdu_script::World).
 struct VoxWorld(Rc<std::cell::RefCell<Voxels>>);
 impl mezdu_script::World for VoxWorld {
-    fn solid(&self, x: i32, y: i32, z: i32) -> bool {
-        self.0.borrow().solid(x, y, z)
+    fn solid(&self, x: i32, y: i32, z: i32, w: u8) -> bool {
+        self.0.borrow().solid_in(x, y, z, w == 1)
+    }
+    fn hazard(&self, x: f32, y: f32, z: f32, w: u8) -> bool {
+        self.0.borrow().hazard_m(x, y, z, w == 1)
     }
     fn ground(&self, x: f32, z: f32) -> f32 {
         let v = self.0.borrow();
@@ -60,6 +63,7 @@ impl mezdu_script::World for VoxWorld {
 /// The story's worlds as the scene takes them (crates/gfx WorldFrame).
 fn world_frame(ws: &mezdu_script::WorldState) -> mezdu_gfx::world::WorldFrame {
     mezdu_gfx::world::WorldFrame {
+        blur: ws.headache,
         night_share: ws.night_share,
         wave_c: ws.wave_c,
         wave_r: ws.wave_r,
@@ -91,6 +95,12 @@ struct Hud {
     panel: Option<Panel>,
     /// «вглядеться» offered (Some(on) when offered: the button shows whether it is on)
     eye: Option<bool>,
+    /// a cinematic or a collapse holds the hero
+    locked: bool,
+    /// the screen's darkness (main.js fade): now, where it goes, how fast (per second)
+    fade: f32,
+    fade_to: f32,
+    fade_speed: f32,
     /// the backpack as the scripts keep it, and the item looked at
     items: Vec<mezdu_script::Item>,
     sel: usize,
@@ -363,6 +373,9 @@ fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
 /// The story over the game: the objective, the backpack button, the line being said, the action button and the
 /// story's windows (a text to read, a thing found).
 fn story_hud(ctx: &egui::Context, hud: &Hud, out: &mut Vec<Action>) {
+    if hud.fade > 0.001 {
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_black_alpha((hud.fade * 255.0) as u8));
+    }
     if !hud.objective.is_empty() {
         egui::Area::new(egui::Id::unique("objective")).anchor(egui::Align2::LEFT_TOP, egui::vec2(18.0, 34.0)).order(egui::Order::Background).show(ctx, |ui| {
             ui.set_max_width(320.0);
@@ -975,10 +988,20 @@ impl App {
                         w.set_prop_visible(&g.queue, &model, pos, on);
                     }
                 }
-                E::Teleport { pos, yaw } => {
+                E::Teleport { pos, yaw, safe } => {
                     if let Some(h) = &mut self.hero {
-                        h.player.place(pos[0], pos[1], pos[2], yaw);
+                        if safe {
+                            // placeSafe: the ground under (x, z) near the hint where the whole body fits
+                            let vox = h.vox.clone();
+                            h.player.spawn(&vox.borrow(), pos[0], pos[2], pos[1] + 1.0, yaw);
+                        } else {
+                            h.player.place(pos[0], pos[1], pos[2], yaw);
+                        }
                     }
+                }
+                E::Fade { to, dur } => {
+                    self.hud.fade_to = to.clamp(0.0, 1.0);
+                    self.hud.fade_speed = (self.hud.fade_to - self.hud.fade).abs() / dur.max(0.01);
                 }
                 E::Move { model, home, to, yaw } => {
                     if let (Some(w), Some(g)) = (&mut self.world, &self.gfx) {
@@ -1473,11 +1496,12 @@ impl App {
         if let (true, None, Some(sc), Some(h)) = (playing, &self.hud.panel, &self.script, &self.hero) {
             let p = &h.player;
             let (c, t) = (glam::Vec3::from(p.cam_pos), glam::Vec3::from(p.cam_target));
-            sc.tick(dt, p.pos, p.yaw, p.cam_pos, (t - c).normalize_or(glam::Vec3::Z).to_array(), eye);
+            sc.tick(dt, p.pos, p.yaw, p.cam_pos, (t - c).normalize_or(glam::Vec3::Z).to_array(), eye, p.on_ground);
         }
         if let Some(sc) = &self.script {
             let ws = sc.world();
             self.hud.eye = ws.eye_available.then_some(ws.peering);
+            self.hud.locked = ws.locked;
             if let Some(h) = &mut self.hero {
                 h.player.night = ws.night;
             }
@@ -1499,7 +1523,8 @@ impl App {
                 if playing && self.hud.panel.is_none() {
                     self.save_t += dt;
                     self.playtime += dt as f64;
-                    let inp = Input { mv, look: h.look, run: self.keys[6] };
+                    // a cinematic or a collapse holds the hero (player.js locked): the view still turns
+                    let inp = if self.hud.locked { Input { mv: [0.0; 2], look: h.look, run: false } } else { Input { mv, look: h.look, run: self.keys[6] } };
                     h.look = [0.0; 2];
                     h.player.update(dt, &inp, &h.vox.borrow());
                     h.player.update_camera(dt, &inp, &h.vox.borrow(), size.height > size.width);
@@ -1519,6 +1544,12 @@ impl App {
             }
         }
         self.story_events();
+        // the fade of the story (respawn, collapse): eased toward its target
+        let hf = &mut self.hud;
+        if hf.fade != hf.fade_to {
+            let step = hf.fade_speed * dt;
+            hf.fade = if hf.fade < hf.fade_to { (hf.fade + step).min(hf.fade_to) } else { (hf.fade - step).max(hf.fade_to) };
+        }
         if self.hud.say.as_ref().is_some_and(|s| s.2 < self.start.elapsed().as_secs_f32()) {
             self.hud.say = None;
         }

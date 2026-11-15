@@ -10,3 +10,6 @@ mezdu-core.workspace = true
 log.workspace = true
 serde_json.workspace = true
 
+
+[dev-dependencies]
+env_logger = "0.11"

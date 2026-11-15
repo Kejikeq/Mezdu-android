@@ -91,6 +91,9 @@ const world = quiet({
     return c;
   },
   clearColliders() { for (const [c] of colliders) c.mask = 0; },
+  // duality.js VoxelWorld: voxels of a world (0 dream, 1 nightmare), hazards (deep water...)
+  solid: (x, y, z, w) => H.solid(x, y, z, w ? 1 : 0),
+  hazardM: (x, y, z, w) => H.hazard(x, y, z, w ? 1 : 0),
 });
 
 const EDITS = { ch1Door: false, ch2Door: false, ch3Door: false, ch4Door: false, startCave: false, bridge1: false, door: false, hedge1: false, hedge2: false, grate: false, tunnelWall: false, hearth: false };
@@ -98,7 +101,7 @@ const EDITS = { ch1Door: false, ch2Door: false, ch3Door: false, ch4Door: false, 
 const G = quiet({
   chapter: 1, state: 'game', time: 0, playtime: 0, flags: {}, inv: [], edits: Object.assign({}, EDITS), cp: null,
   interactables: [], triggers: [], updaters: [], waits: [], lights: [], anchors: [],
-  sceneName: '', headache: 0, voidMode: false, glitch: 0, fadeV: 0, fadeTo: 0, fadeCol: [0, 0, 0], camOverride: null,
+  sceneName: '', voidMode: false, glitch: 0, fadeV: 0, fadeTo: 0, fadeCol: [0, 0, 0], camOverride: null,
   cineLock: false, busy: false, flashOn: false, heartOverride: null, fearExtra: 0, TransitioningChapter: false, peering: false,
   settings: { sens: 1, invertY: false, vibrate: true },
   player: quiet({
@@ -110,6 +113,10 @@ const G = quiet({
   // G.duality: the web's Duality (script/game/duality.js), created in boot
   duality: null,
   nightSmooth: 0, peering: false, eyeCool: 0, lowWarned: false, stoneUntil: 0,
+  // play_rules.js: the headache of leaving the path, the last safe spot
+  headache: 0, headSaid: 0, headT: 0, headToward: false, routeDir: null, lastSafe: null, safeT: 0, noHeadache: false,
+  // scratch the shared rules keep on G (main.js makes them in its constructor): real members, not the quiet stub
+  _routeDirBuf: null, _bestRoute: null, fallN: 0,
   deer: actor(), rabbit: actor(), mike: actor(), shadow: actor(),
   models: new Proxy({}, { get: (t, k) => (typeof k === 'string' && k !== 'then' ? k : undefined) }),
   ui, memoryBoard,
@@ -136,7 +143,8 @@ const G = quiet({
   flushWaits() { while (this.waits.length) this.waits.shift().res(); },
   say(text, dur = 4, who) { say(text, dur, who); },
   objective(t) { ui.setObjective(t); },
-  fade(to, dur = 1) { this.fadeV = to; return this.wait(Math.min(dur, 2)); },
+  // the screen goes dark (1) or clears (0) over `dur` seconds: the native side draws it
+  fade(to, dur = 1) { this.fadeV = to; emit({ t: 'fade', to, dur }); return this.wait(dur); },
   vibrate() {},
   // the rules of the two worlds: the web's game/world_rules.js from the pack (WR, set in boot)
   worldAtPlayer() { return WR.worldAtPlayer(this); },
@@ -144,8 +152,9 @@ const G = quiet({
   toDream(opts = {}) { WR.toDream(this, opts); },
   peer() { WR.peer(this); },
   stopPeer() { WR.stopPeer(this); },
-  // main.js respawn: the collapse back to the road is the native side's (event 'collapse'); once until the mind recovers
-  respawn(why) { if (!this.respawning) { this.respawning = true; emit({ t: why === 'collapse' ? 'collapse' : 'respawn' }); } },
+  // falls, a collapse: play_rules.js (the screen fades, the hero is put back on safe ground)
+  respawn(why) { return PR.respawn(this, why); },
+  collapseToRoute() { return PR.collapseToRoute(this); },
   respawning: false,
   stab(d) { this.duality.stability = Math.max(0, Math.min(100, this.duality.stability + d)); },
   lock(v) { this.cineLock = !!v; },
@@ -162,7 +171,13 @@ const G = quiet({
     if (y === null || y === undefined) y = this.groundAt(x, z, o.mask === 2 ? 1 : 0);
     return new Prop(model, x, y, z, yaw, o);
   },
-  placeSafe(x, y, z, yaw) { this.player.place(x, y ?? this.groundAt(x, z), z, yaw); },
+  // main.js placeSafe: the native side finds the ground near (x, z) where the whole body fits
+  placeSafe(x, y, z, yaw) {
+    const hy = y ?? this.groundAt(x, z);
+    this.player.pos = [x, hy, z]; if (yaw !== undefined) this.player.yaw = yaw;
+    emit({ t: 'teleport', p: [x, hy, z], yaw: this.player.yaw, safe: true });
+    return hy;
+  },
   groundAt(x, z) { return H.ground(x, z); },
   groundBelow(x, y, z) { return H.ground(x, z); },
   setEdit(name, on) {
@@ -182,6 +197,8 @@ const G = quiet({
     const D = this.duality;
     if (D) { D.base = 0; D.wave.active = false; D.bubbles.length = 0; D.stability = 100; D.nightTimer = 0; D.flicker = 0; D.baseNight = false; }
     this.peering = false; this.lowWarned = false; this.nightSmooth = 0; this.voidMode = false;
+    // main.js resetRun: the headache, a cinematic, the last safe spot
+    this.headache = 0; this.headSaid = 0; this.headT = 0; this.respawning = false; this.cineLock = false; this.lastSafe = null; this.eyeCool = 0;
   },
 });
 globalThis.G = G;
@@ -201,13 +218,16 @@ const prompt = (it) => {
     emit({ t: 'prompt', label: label || '', icon: it ? String(typeof it.icon === 'function' ? it.icon() : it.icon) : '' });
   }
 };
-const los = { playerPos: null, playerYaw: 0, camPos: [0, 0, 0], camForward: [0, 0, 1], solidVoxelFn: (x, y, z) => H.solid(x, y, z), vs: 0.125 };
+// the line of sight to a thing is tested in the hero's world (main.js _solidD / _solidN)
+const solidD = (x, y, z) => H.solid(x, y, z, 0), solidN = (x, y, z) => H.solid(x, y, z, 1);
+const los = { playerPos: null, playerYaw: 0, camPos: [0, 0, 0], camForward: [0, 0, 1], solidVoxelFn: solidD, vs: 0.125 };
 
 globalThis.__boot = async (mods) => {
   ITEMS = mods.ITEMS;
   scoreInteractable = mods.scoreInteractable;
   G.duality = new mods.Duality();
   WR = mods.WR;
+  PR = mods.PR;
   mods.setupStory(G);
   log(`story: ${G.interactables.length} interactables, ${G.triggers.length} triggers, ${Object.keys(ITEMS).length} items`);
 };
@@ -226,41 +246,47 @@ globalThis.__cam = (cx, cy, cz, fx, fy, fz) => {
   const c = G.player.camPos;
   c[0] = cx; c[1] = cy; c[2] = cz; camFwd[0] = fx; camFwd[1] = fy; camFwd[2] = fz;
 };
-// the rules of the two worlds (script/game/world_rules.js), given by boot
-let WR = null;
+// the rules of the two worlds (script/game/world_rules.js) and of play (script/game/play_rules.js), given by boot
+let WR = null, PR = null;
 
 // what the native side reads after each tick (Float64Array, see crates/script WorldState)
-const ST = new Float64Array(21);
+const ST = new Float64Array(23);
 globalThis.__ST = ST;
 
-globalThis.__tick = (dt, px, py, pz, yaw, eye) => {
+const moveDir = [0, 0];
+globalThis.__tick = (dt, px, py, pz, yaw, eye, onGround) => {
   G.time += dt; G.playtime += dt;
   const p = G.player;
-  p.pos[0] = px; p.pos[1] = py; p.pos[2] = pz; p.yaw = yaw;
+  // the hero's move direction on the ground (player.js moveDir), from where he was a frame ago
+  const mx = px - p.pos[0], mz = pz - p.pos[2], ml = Math.hypot(mx, mz);
+  if (ml > 1e-4 && ml < 2) { moveDir[0] = mx / ml; moveDir[1] = mz / ml; p.moveDir = moveDir; } else p.moveDir = null;
+  p.pos[0] = px; p.pos[1] = py; p.pos[2] = pz; p.yaw = yaw; p.onGround = !!onGround;
   const D = G.duality;
   let w = 0;
+  // main.js update order, the shared rules from the pack (world_rules.js, play_rules.js): the waits, the world,
+  // the way back to the path, falls, the thing to interact with, triggers, the story's updaters, «вглядеться»,
+  // the headache, the stability
   try {
-    // main.js update order: the world (anchors, wave, night share) → … → «вглядеться» → stability
+    PR.resolveWaits(G);
     w = WR.updateWorld(G, dt, false, false);
+    PR.updateHeadToward(G);
+    PR.checkFall(G, dt, w);
   } catch (e) { log('world: ' + (e && e.stack || e)); }
-  for (let i = G.waits.length - 1; i >= 0; i--) {
-    if (G.time >= G.waits[i].t) { const w = G.waits[i]; G.waits.splice(i, 1); w.res(); }
+  const night = w > 0.5;
+  if (G.busy || G.cineLock) { cur = null; prompt(null); } else {
+    los.playerPos = p.pos; los.playerYaw = yaw; los.camPos = p.camPos; los.camForward = camFwd; los.solidVoxelFn = night ? solidN : solidD;
+    try { cur = PR.chooseInteractable(G, los, w); } catch (e) { cur = null; log('interact: ' + (e && e.stack || e)); }
+    prompt(cur);
   }
   try {
-    for (const t of G.triggers) {
-      if (t.fired && t.once) continue;
-      if (t.cond && !t.cond()) continue;
-      const inside = t.test ? t.test(p.pos) : Math.hypot(p.pos[0] - t.pos[0], p.pos[2] - t.pos[2]) < t.r;
-      if (inside && !t.inside) { t.inside = true; if (!(t.once && t.fired)) { t.fired = true; Promise.resolve(t.run()).catch((e) => log('trigger: ' + e)); } }
-      else if (!inside) t.inside = false;
-    }
+    PR.updateTriggers(G);
     for (const f of G.updaters) f(dt);
     WR.updatePeer(G, dt, !!eye);
+    PR.updateHeadache(G, dt);
     WR.updateStability(G, dt, w);
-    if (G.respawning && D.stability > 0) G.respawning = false;
   } catch (e) { log('update: ' + (e && e.stack || e)); }
   // the world state for the native renderer and the collisions
-  const W = D.wave, night = WR.worldAtPlayer(G) > 0.5;
+  const W = D.wave;
   ST[0] = night ? 1 : 0; ST[1] = G.nightSmooth;
   ST[2] = W.c[0]; ST[3] = W.c[1]; ST[4] = W.c[2]; ST[5] = W.r;
   ST[6] = W.from; ST[7] = W.to; ST[8] = W.active ? 1 : 0; ST[9] = D.base;
@@ -269,23 +295,10 @@ globalThis.__tick = (dt, px, py, pz, yaw, eye) => {
   // main.js cullMask: which worlds the chunks show (1 dream, 2 nightmare, 3 both: per pixel)
   ST[18] = WR.cullMask(G);
   ST[19] = D.bubbles.length;
-  // «вглядеться» is offered (main.js updatePeer: the flag, the chapters up to 8, no cinematic)
+  // «вглядеться» is offered (the flag, the chapters up to 8, no cinematic)
   ST[20] = WR.eyeAvailable(G) ? 1 : 0;
-  if (G.busy || G.cineLock) { cur = null; prompt(null); return; }
-  los.playerPos = p.pos; los.playerYaw = yaw; los.camPos = p.camPos; los.camForward = camFwd;
-  let best = null, bs = Infinity;
-  for (const it of G.interactables) {
-    if (it.done) continue;
-    if (it.world === 'd' && night) continue;
-    if (it.world === 'n' && !night) continue;
-    try {
-      if (it.cond && !it.cond()) continue;
-      const s = scoreInteractable(it, los);
-      if (s < bs) { bs = s; best = it; }
-    } catch (e) { /* a broken condition hides its thing */ }
-  }
-  cur = best;
-  prompt(best);
+  // the headache blurs the frame (main.js S.blur); a cinematic or a collapse holds the hero (player.js locked)
+  ST[21] = G.headache; ST[22] = G.cineLock ? 1 : 0;
 };
 
 /** the action button */

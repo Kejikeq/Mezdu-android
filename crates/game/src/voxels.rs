@@ -3,6 +3,7 @@ use mezdu_core::Pack;
 
 pub const F_SOLID: u8 = 1;
 pub const F_LEAF: u8 = 4;
+pub const F_HAZARD: u8 = 128;
 
 pub struct Voxels {
     pub vs: f32,
@@ -118,6 +119,12 @@ impl Voxels {
 
     pub fn solid_m_in(&self, x: f32, y: f32, z: f32, night: bool) -> bool {
         self.solid_in((x / self.vs).floor() as i32, (y / self.vs).floor() as i32, (z / self.vs).floor() as i32, night)
+    }
+
+    /// duality.js hazardM: deep water, a gorge... at (x, y, z) metres in the given world
+    pub fn hazard_m(&self, x: f32, y: f32, z: f32, night: bool) -> bool {
+        let m = self.mat_in((x / self.vs).floor() as i32, (y / self.vs).floor() as i32, (z / self.vs).floor() as i32, night);
+        self.flags[m as usize] & F_HAZARD != 0
     }
 
     pub fn mat_in(&self, x: i32, y: i32, z: i32, night: bool) -> u8 {

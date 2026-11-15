@@ -123,6 +123,8 @@ pub struct WorldFrame {
     pub wave2_r: f32,
     /// which worlds the chunks show: 1 dream, 2 nightmare, 3 both (per pixel)
     pub cull: u32,
+    /// 0..1: the headache of leaving the story path blurs the frame (main.js S.blur → player.w)
+    pub blur: f32,
 }
 
 #[derive(Default)]
@@ -138,6 +140,8 @@ struct Cascade {
 pub struct World {
     /// the worlds the chunks show now (1 dream, 2 nightmare, 3 both), see WorldFrame
     cull: u32,
+    /// the headache's blur (frame player.w)
+    blur: f32,
     /// the same at the last frame: a change re-draws the shadows
     cull_last: u32,
     /// exposure of the dream and of the nightmare of this chapter (the scene blends them by the night share)
@@ -629,6 +633,7 @@ impl World {
         Ok(World {
             cull: 1,
             cull_last: 1,
+            blur: 0.0,
             exp_d,
             exp_n,
             frame_c1: frame.clone(),
@@ -808,6 +813,7 @@ impl World {
         f[132] = self.exp_d + (self.exp_n - self.exp_d) * ns; // exposure (main.js)
         f[133] = 0.2 + ns * 0.25; // vignette
         f[135] = 0.03 + ns * 0.01; // grain
+        self.blur = w.blur.clamp(0.0, 1.0);
         self.cull = w.cull.clamp(1, 3);
     }
 
@@ -884,6 +890,7 @@ impl World {
         f[pf.out_res..pf.out_res + 4].copy_from_slice(&[w as f32, h as f32, 1.0 / w as f32, 1.0 / h as f32]);
         f[pf.focal] = h as f32 * 0.5 * proj.y_axis.y;
         f[124..127].copy_from_slice(&focus.to_array()); // player (grass bends away from it)
+        f[127] = self.blur; // player.w: the headache's blur
         f[32..48].copy_from_slice(&self.casc[0].mat);
         f[376..392].copy_from_slice(&self.casc[1].mat);
         let ssv = |on: bool| if on && self.ss_valid { 1.0 } else { 0.0 };

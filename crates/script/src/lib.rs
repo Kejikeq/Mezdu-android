@@ -10,8 +10,10 @@ use std::rc::Rc;
 
 /// What the scripts need of the world.
 pub trait World {
-    /// dream-world voxel at voxel coordinates
-    fn solid(&self, x: i32, y: i32, z: i32) -> bool;
+    /// a voxel at voxel coordinates is solid in the world `w` (0 dream, 1 nightmare)
+    fn solid(&self, x: i32, y: i32, z: i32, w: u8) -> bool;
+    /// a hazard (deep water, a gorge) at (x, y, z) metres in the world `w`
+    fn hazard(&self, x: f32, y: f32, z: f32, w: u8) -> bool;
     /// the ground under (x, z) in metres
     fn ground(&self, x: f32, z: f32) -> f32;
 }
@@ -30,7 +32,10 @@ pub enum Event {
     Inspect { id: u32, item: String, kicker: String, title: String, desc: String, buttons: Vec<(String, serde_json::Value)> },
     /// a story prop shown or hidden (model name, position)
     Prop { model: String, pos: [f32; 3], on: bool },
-    Teleport { pos: [f32; 3], yaw: f32 },
+    /// the hero put somewhere; `safe`: on ground near there where the whole body fits (main.js placeSafe)
+    Teleport { pos: [f32; 3], yaw: f32, safe: bool },
+    /// the screen darkens (1) or clears (0) over `dur` seconds
+    Fade { to: f32, dur: f32 },
     /// a story prop moved and turned (a door on its hinge): found by where it was placed (`home`)
     Move { model: String, home: [f32; 3], to: [f32; 3], yaw: f32 },
     /// a story box the hero cannot walk through while `on` (min x y z, max x y z)
@@ -71,6 +76,10 @@ pub struct WorldState {
     pub cull: u32,
     /// «вглядеться» is offered now (the story's flag, the chapters up to 8, no cinematic)
     pub eye_available: bool,
+    /// 0..1: the hero left the story path (the frame blurs, main.js S.blur)
+    pub headache: f32,
+    /// a cinematic or a collapse holds the hero (no walking)
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,7 +97,8 @@ import { ITEMS } from 'game/items.js';\n\
 import { scoreInteractable } from 'game/interaction_los.js';\n\
 import { Duality } from 'game/duality.js';\n\
 import * as WR from 'game/world_rules.js';\n\
-await globalThis.__boot({ setupStory, ITEMS, scoreInteractable, Duality, WR });\n";
+import * as PR from 'game/play_rules.js';\n\
+await globalThis.__boot({ setupStory, ITEMS, scoreInteractable, Duality, WR, PR });\n";
 
 /// module names are paths under script/ ("game/story.js"); imports are relative to the importing module
 struct PackResolver;
@@ -142,7 +152,10 @@ impl Script {
         ctx.with(|ctx| -> Result<(), String> {
             let host = Object::new(ctx.clone()).map_err(|e| e.to_string())?;
             let w = world.clone();
-            let solid = Function::new(ctx.clone(), move |x: i32, y: i32, z: i32| w.solid(x, y, z)).map_err(|e| e.to_string())?;
+            let solid = Function::new(ctx.clone(), move |x: i32, y: i32, z: i32, wo: i32| w.solid(x, y, z, wo as u8)).map_err(|e| e.to_string())?;
+            let wz = world.clone();
+            let hazard = Function::new(ctx.clone(), move |x: f64, y: f64, z: f64, wo: i32| wz.hazard(x as f32, y as f32, z as f32, wo as u8)).map_err(|e| e.to_string())?;
+            host.set("hazard", hazard).map_err(|e| e.to_string())?;
             let w = world.clone();
             let ground = Function::new(ctx.clone(), move |x: f64, z: f64| w.ground(x as f32, z as f32) as f64).map_err(|e| e.to_string())?;
             let log = Function::new(ctx.clone(), |t: String| log::info!("{t}")).map_err(|e| e.to_string())?;
@@ -203,9 +216,10 @@ impl Script {
 
     /// every frame of play: the camera (position, forward vector), then the hero (feet, facing) and «вглядеться»
     /// held or not. Afterwards `world` reads what the frame needs.
-    pub fn tick(&self, dt: f32, pos: [f32; 3], yaw: f32, cam: [f32; 3], fwd: [f32; 3], eye: bool) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick(&self, dt: f32, pos: [f32; 3], yaw: f32, cam: [f32; 3], fwd: [f32; 3], eye: bool, on_ground: bool) {
         self.call("__cam", (cam[0], cam[1], cam[2], fwd[0], fwd[1], fwd[2]));
-        self.call("__tick", (dt, pos[0], pos[1], pos[2], yaw, eye));
+        self.call("__tick", (dt, pos[0], pos[1], pos[2], yaw, eye, on_ground));
     }
 
     /// the world as the scripts have it after the last tick (no allocation: the script keeps one array)
@@ -214,7 +228,7 @@ impl Script {
             let Ok(st) = ctx.globals().get::<_, rquickjs::TypedArray<f64>>("__ST") else { return WorldState::default() };
             // SAFETY: the array lives in the script's globals and is only read here, between two script calls
             let v = unsafe { st.as_slice() };
-            if v.len() < 21 {
+            if v.len() < 23 {
                 return WorldState::default();
             }
             let f = |i: usize| v[i] as f32;
@@ -233,6 +247,8 @@ impl Script {
                 peering: v[16] > 0.5,
                 cull: v[18] as u32,
                 eye_available: v[20] > 0.5,
+                headache: f(21),
+                locked: v[22] > 0.5,
             }
         })
     }
@@ -308,7 +324,8 @@ fn event(e: &serde_json::Value) -> Option<Event> {
             buttons: e["buttons"].as_array()?.iter().map(|b| (b[0].as_str().unwrap_or("").to_string(), b[1].clone())).collect(),
         },
         "prop" => Event::Prop { model: s("model"), pos: p("p"), on: e["on"].as_bool().unwrap_or(true) },
-        "teleport" => Event::Teleport { pos: p("p"), yaw: f("yaw") },
+        "teleport" => Event::Teleport { pos: p("p"), yaw: f("yaw"), safe: e["safe"].as_bool().unwrap_or(false) },
+        "fade" => Event::Fade { to: f("to"), dur: f("dur") },
         "move" => Event::Move { model: s("model"), home: p("p"), to: p("to"), yaw: f("yaw") },
         "collider" => {
             let b = &e["box"];
@@ -341,8 +358,11 @@ mod tests {
 
     struct Flat;
     impl World for Flat {
-        fn solid(&self, _x: i32, y: i32, _z: i32) -> bool {
+        fn solid(&self, _x: i32, y: i32, _z: i32, _w: u8) -> bool {
             y < 0
+        }
+        fn hazard(&self, _x: f32, _y: f32, _z: f32, _w: u8) -> bool {
+            false
         }
         fn ground(&self, _x: f32, _z: f32) -> f32 {
             7.0
@@ -353,6 +373,7 @@ mod tests {
     #[test]
     fn story_runs() {
         let Ok(dir) = std::env::var("MEZDU_PACK") else { return };
+        let _ = env_logger::builder().is_test(true).try_init();
         let pack = mezdu_core::Pack::open(&dir).unwrap();
         let s = Script::new(sources(&pack).unwrap(), Rc::new(Flat)).unwrap();
         s.new_game();
@@ -362,13 +383,13 @@ mod tests {
         let found = s.ctx.with(|ctx| ctx.eval::<Vec<f64>, _>("G.interactables.find(i => String(typeof i.label === 'function' ? i.label() : i.label).startsWith('Стол в кабинете')).pos").unwrap());
         let (x, y, z) = (found[0] as f32, found[1] as f32, found[2] as f32);
         let feet = [x - 1.0, y - 0.7, z];
-        s.tick(0.1, feet, std::f32::consts::FRAC_PI_2, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0], false);
+        s.tick(0.1, feet, std::f32::consts::FRAC_PI_2, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0], false, true);
         let ev = s.drain();
         assert!(ev.iter().any(|e| matches!(e, Event::Prompt { label, .. } if label.starts_with("Стол"))), "{ev:?}");
         s.act();
         let mut asked = None;
         for _ in 0..40 {
-            s.tick(0.5, feet, 1.57, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0], false);
+            s.tick(0.5, feet, 1.57, [x - 3.0, y + 1.0, z], [1.0, 0.0, 0.0], false, true);
             for e in s.drain() {
                 if let Event::Inspect { id, item, .. } = &e {
                     assert_eq!(item, "student_pass");
@@ -396,8 +417,11 @@ mod nightmare {
 
     struct Flat;
     impl World for Flat {
-        fn solid(&self, _x: i32, y: i32, _z: i32) -> bool {
+        fn solid(&self, _x: i32, y: i32, _z: i32, _w: u8) -> bool {
             y < 0
+        }
+        fn hazard(&self, _x: f32, _y: f32, _z: f32, _w: u8) -> bool {
+            false
         }
         fn ground(&self, _x: f32, _z: f32) -> f32 {
             7.0
@@ -416,15 +440,15 @@ mod nightmare {
         let fwd = [1.0, 0.0, 0.0];
         // a few frames of the dream
         for _ in 0..3 {
-            s.tick(0.1, pos, 0.0, pos, fwd, false);
+            s.tick(0.1, pos, 0.0, pos, fwd, false, true);
         }
         let w = s.world();
         assert!(!w.night && w.cull == 1 && w.base == 0, "{w:?}");
         // hold R: the nightmare comes in around the hero (the wave grows)
-        s.tick(0.1, pos, 0.0, pos, fwd, true);
+        s.tick(0.1, pos, 0.0, pos, fwd, true, true);
         let mut grew = false;
         for _ in 0..30 {
-            s.tick(0.1, pos, 0.0, pos, fwd, false);
+            s.tick(0.1, pos, 0.0, pos, fwd, false, true);
             let w = s.world();
             if w.wave_active && w.wave_r > 0.0 {
                 grew = true;
@@ -436,17 +460,68 @@ mod nightmare {
         assert!(s.world().peering);
         let before = s.world().stability;
         for _ in 0..40 {
-            s.tick(0.5, pos, 0.0, pos, fwd, false);
+            s.tick(0.5, pos, 0.0, pos, fwd, false, true);
         }
         assert!(s.world().stability < before, "the nightmare drains the mind");
         // R again: back to the dream
-        s.tick(0.1, pos, 0.0, pos, fwd, true);
+        s.tick(0.1, pos, 0.0, pos, fwd, true, true);
         for _ in 0..200 {
-            s.tick(0.1, pos, 0.0, pos, fwd, false);
+            s.tick(0.1, pos, 0.0, pos, fwd, false, true);
         }
         let w = s.world();
         assert!(!w.peering, "{w:?}");
         assert_eq!(w.base, 0, "{w:?}");
         assert!(!w.wave_active, "{w:?}");
+    }
+}
+
+#[cfg(test)]
+mod path {
+    use super::*;
+
+    struct Flat;
+    impl World for Flat {
+        fn solid(&self, _x: i32, y: i32, _z: i32, _w: u8) -> bool {
+            y < 0
+        }
+        fn hazard(&self, _x: f32, _y: f32, _z: f32, _w: u8) -> bool {
+            false
+        }
+        fn ground(&self, _x: f32, _z: f32) -> f32 {
+            7.0
+        }
+    }
+
+    /// Far from the story path the headache grows, the frame blurs, then the hero collapses and is put back on the
+    /// path (play_rules.js updateHeadache / collapseToRoute): MEZDU_PACK=<pack with script/> cargo test -p mezdu-script
+    #[test]
+    fn leaving_the_path_hurts_and_brings_back() {
+        let Ok(dir) = std::env::var("MEZDU_PACK") else { return };
+        let pack = mezdu_core::Pack::open(&dir).unwrap();
+        let s = Script::new(sources(&pack).unwrap(), Rc::new(Flat)).unwrap();
+        s.new_game();
+        s.drain();
+        // 32 m from the nearest route of chapter 1, outside the open settlement
+        let far = [100.0, 7.0, 100.0];
+        let (mut said, mut faded, mut back) = (false, false, None);
+        let mut max_h: f32 = 0.0;
+        for _ in 0..200 {
+            s.tick(0.1, far, 0.0, far, [1.0, 0.0, 0.0], false, true);
+            max_h = max_h.max(s.world().headache);
+            for e in s.drain() {
+                match e {
+                    Event::Say { text, .. } if text.contains("Виски") => said = true,
+                    Event::Fade { to, .. } if to > 0.5 => faded = true,
+                    Event::Teleport { pos, safe: true, .. } => back = Some(pos),
+                    _ => {}
+                }
+            }
+            if back.is_some() {
+                break;
+            }
+        }
+        assert!(max_h > 0.9 && said && faded, "headache {max_h}, said {said}, faded {faded}");
+        let p = back.expect("put back on the path");
+        assert!((p[0] - far[0]).hypot(p[2] - far[2]) > 5.0, "{p:?}");
     }
 }
