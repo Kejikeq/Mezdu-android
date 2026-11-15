@@ -32,3 +32,8 @@ strip = true
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# rquickjs ships no C bindings for Android: its sys crate, vendored with the Linux bindings copied under the Android
+# targets (the QuickJS API does not depend on the C library: the glibc and musl bindings are the same file)
+[patch.crates-io]
+rquickjs-sys = { path = "vendor/rquickjs-sys" }

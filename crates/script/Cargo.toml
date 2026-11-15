@@ -10,7 +10,3 @@ mezdu-core.workspace = true
 log.workspace = true
 serde_json.workspace = true
 
-# rquickjs ships no C bindings for Android: generated at build time there (libclang of the CI runner, the NDK's
-# sysroot from cargo-ndk)
-[target.'cfg(target_os = "android")'.dependencies]
-rquickjs = { version = "0.14", features = ["loader", "bindgen"] }

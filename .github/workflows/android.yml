@@ -34,18 +34,10 @@ jobs:
           sudo apt-get install -y -q libxkbcommon-dev >/dev/null
           cargo clippy --release -- -D warnings
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          # bindgen (QuickJS of crates/script) needs a versioned Android triple and the NDK's sysroot
-          SYS="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--target=aarch64-linux-android26 --sysroot=$SYS"
-          export BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android="--target=x86_64-linux-android26 --sysroot=$SYS"
           cargo ndk -t arm64-v8a -P 26 clippy --release -p mezdu-app -- -D warnings
       - name: native libs
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          # bindgen (QuickJS of crates/script) needs a versioned Android triple and the NDK's sysroot
-          SYS="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--target=aarch64-linux-android26 --sysroot=$SYS"
-          export BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android="--target=x86_64-linux-android26 --sysroot=$SYS"
           export MEZDU_BUILD="${GITHUB_SHA::7}" # the APK compares it with apk-version.txt of the release
           cargo ndk -t arm64-v8a -t x86_64 -P 26 -o app/src/main/jniLibs build --release -p mezdu-app --lib
           # the launcher (entry of the APK) starts the downloaded libmezdu.so or the bundled one
