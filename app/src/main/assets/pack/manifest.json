@@ -14,8 +14,8 @@
   "floats": 416
  },
  "version": "v2.0.0",
- "commit": "af87d128332aca5b5d02d44988d7d9a0b2d873b7",
- "created": "2026-11-14T22:47:25.200Z",
+ "commit": "e1ba6b350c46a042c5bc61273c53dcd2d770687e",
+ "created": "2026-11-15T01:58:25.281Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -368,28 +368,9 @@
    "tz": 9
   },
   {
-   "path": "models/faces.bin.zst",
-   "sha256": "a1114596de6fd69d60c7e04255f2622dcf14f4b125ba954609b90f9016844869",
-   "size": 2575017,
-   "kind": "models"
-  },
-  {
-   "path": "models/models.json",
-   "sha256": "f6e32a71f1eecdcb0e4f05e32b3ecd64bd03bc6aa27905feee0f66c1fd85c47a",
-   "size": 61975,
-   "kind": "models"
-  },
-  {
-   "path": "models/instances.bin.zst",
-   "sha256": "4a9975ed9d5cbbed471e16400764a9d51283ced6ebaa6c03165da5e0491d4916",
-   "size": 62834,
-   "kind": "models",
-   "count": 4550
-  },
-  {
    "path": "grass.bin.zst",
-   "sha256": "bef49ee403ef7797973d51d6f2573ef7a6b5f91b982e34905e9bdf9fe6d3e8d3",
-   "size": 46168,
+   "sha256": "6b3fb7f639020a27682afcedf340cae3f25948ce105dcf8dea73a8fa25885055",
+   "size": 533423,
    "kind": "grass",
    "words": 1228800
   },
@@ -472,6 +453,25 @@
    "kind": "frame",
    "chapter": 10,
    "sky": "dusk"
+  },
+  {
+   "path": "models/faces.bin.zst",
+   "sha256": "a1114596de6fd69d60c7e04255f2622dcf14f4b125ba954609b90f9016844869",
+   "size": 2575017,
+   "kind": "models"
+  },
+  {
+   "path": "models/models.json",
+   "sha256": "f6e32a71f1eecdcb0e4f05e32b3ecd64bd03bc6aa27905feee0f66c1fd85c47a",
+   "size": 61975,
+   "kind": "models"
+  },
+  {
+   "path": "models/instances.bin.zst",
+   "sha256": "4a9975ed9d5cbbed471e16400764a9d51283ced6ebaa6c03165da5e0491d4916",
+   "size": 62834,
+   "kind": "models",
+   "count": 4550
   }
  ],
  "bundled": true
