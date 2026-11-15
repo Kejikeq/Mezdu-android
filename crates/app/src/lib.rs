@@ -145,120 +145,96 @@ fn load(ctx: mezdu_gfx::DeviceCtx, data_dir: PathBuf, fixed: Option<PathBuf>, st
 }
 
 /// the nightmare half of the logo and the hot end of the progress bar
-const EMBER: egui::Color32 = egui::Color32::from_rgb(0xa8, 0x2c, 0x2a);
+const EMBER: egui::Color32 = egui::Color32::from_rgb(0xc8, 0x46, 0x5e);
 
-/// Metal of the logo, top of the letters to the bottom: a bright sky, a dark horizon a little below the middle,
-/// the warm floor reflected under it (chrome). Silver is the dream, copper-crimson the nightmare.
-const SILVER: [(f32, [u8; 3]); 5] = [(0.0, [0xff, 0xff, 0xff]), (0.46, [0xb8, 0xc2, 0xd0]), (0.52, [0x3c, 0x44, 0x52]), (0.62, [0x8e, 0x98, 0xa8]), (1.0, [0xe9, 0xee, 0xf5])];
-const COPPER: [(f32, [u8; 3]); 5] = [(0.0, [0xff, 0xe6, 0xd2]), (0.46, [0xd8, 0x6a, 0x4c]), (0.52, [0x52, 0x10, 0x14]), (0.62, [0xa8, 0x2c, 0x2a]), (1.0, [0xff, 0x9c, 0x7a])];
-/// the brass of the wheel
-const BRASS: [u8; 3] = [0xc9, 0xa2, 0x5c];
+/// The letters of the logo on a pixel grid, 11 rows each, strokes two pixels thick ('#' = a pixel).
+const GLYPHS: [&[&str]; 5] = [
+    // М: two posts, the V between them reaching the middle
+    &["##.....##", "###...###", "####.####", "##.###.##", "##..#..##", "##.....##", "##.....##", "##.....##", "##.....##", "##.....##", "##.....##"],
+    // Е: the middle bar a little shorter than the others
+    &["#######", "#######", "##.....", "##.....", "######.", "######.", "##.....", "##.....", "##.....", "#######", "#######"],
+    // Ж: a stem, two arms up, two arms down
+    &["##...##...##", "##...##...##", ".##..##..##.", "..##.##.##..", "...######...", "....####....", "...######...", "..##.##.##..", ".##..##..##.", "##...##...##", "##...##...##"],
+    // Д: a roof, a slanting left side, the base with two feet
+    &["...######.", "...######.", "...##..##.", "...##..##.", "..##...##.", "..##...##.", ".##....##.", "##########", "##########", "##......##", "##......##"],
+    // У: two arms, the right one going on down to the lower left
+    &["##.....##", "##.....##", ".##...##.", ".##...##.", "..##.##..", "..##.##..", "...###...", "...##....", "..##.....", "###......", "##......."],
+];
+/// Where Ж tears, row by row: pixels from this column on are the nightmare's. It runs along the rising arms, between
+/// the two pixels of each, and steps down through the stem — each arm splits lengthwise into a gold and a red half.
+const ZH_TEAR: [usize; 11] = [11, 11, 10, 9, 7, 6, 5, 3, 2, 1, 1];
+/// blank pixels between letters (the wide spacing of the web title)
+const TRACK: usize = 3;
+/// the dream's gold and the nightmare's crimson, top row → bottom row
+const GOLD: [[u8; 3]; 2] = [[0xf3, 0xd3, 0x8c], [0xb8, 0x86, 0x3c]];
+const CRIMSON: [[u8; 3]; 2] = [[0xe8, 0x6a, 0x80], [0x96, 0x26, 0x3e]];
 
-fn ramp(stops: &[(f32, [u8; 3])], v: f32) -> egui::Color32 {
-    let v = v.clamp(0.0, 1.0);
-    let i = stops.iter().position(|s| s.0 >= v).unwrap_or(stops.len() - 1).max(1);
-    let ((a, ca), (b, cb)) = (stops[i - 1], stops[i]);
-    let t = ((v - a) / (b - a).max(1e-4)).clamp(0.0, 1.0);
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
-    egui::Color32::from_rgb(l(ca[0], cb[0]), l(ca[1], cb[1]), l(ca[2], cb[2]))
+fn shade(c: [[u8; 3]; 2], v: f32, k: f32) -> egui::Color32 {
+    let l = |a: u8, b: u8| ((a as f32 + (b as f32 - a as f32) * v) * k).clamp(0.0, 255.0) as u8;
+    egui::Color32::from_rgb(l(c[0][0], c[1][0]), l(c[0][1], c[1][1]), l(c[0][2], c[1][2]))
 }
 
-/// brass lit from the upper left: `k` is how much a surface at angle `a` faces the light
-fn brass(a: f32, alpha: f32) -> egui::Color32 {
-    let k = 0.45 + 0.55 * (a + 2.3).cos().max(-0.6);
-    let c = |x: u8| ((x as f32 * k * 1.25).min(255.0)) as u8;
-    egui::Color32::from_rgb(c(BRASS[0]), c(BRASS[1]), c(BRASS[2])).gamma_multiply(alpha)
-}
-
-/// The wheel of samsara behind the word: a brass rim with eight knobs and eight spokes turning slowly one way,
-/// a ring of marks turning the other way, a hub in the middle.
-fn wheel(p: &egui::Painter, c: egui::Pos2, r: f32, t: f32) {
-    let tau = std::f32::consts::TAU;
-    let at = |a: f32, d: f32| c + egui::vec2(a.cos(), a.sin()) * d;
-    let arc = |d: f32, w: f32, alpha: f32| {
-        let n = 120;
-        for i in 0..n {
-            let (a0, a1) = (i as f32 / n as f32 * tau, (i + 1) as f32 / n as f32 * tau);
-            p.line_segment([at(a0, d), at(a1, d)], egui::Stroke::new(w, brass((a0 + a1) * 0.5, alpha)));
-        }
-    };
-    let rot = t * 0.22;
-    p.circle_filled(c, r * 1.02, egui::Color32::from_rgba_unmultiplied(0x0a, 0x08, 0x0c, 0x90));
-    arc(r, r * 0.06, 0.95);
-    arc(r * 0.9, r * 0.012, 0.6);
-    arc(r * 0.74, r * 0.025, 0.85);
-    // the marks between the rims, against the turn
-    for i in 0..48 {
-        let a = i as f32 / 48.0 * tau - t * 0.11;
-        let long = i % 6 == 0;
-        p.line_segment([at(a, r * 0.78), at(a, r * if long { 0.88 } else { 0.84 })], egui::Stroke::new(r * 0.01, brass(a, 0.55)));
-    }
-    for i in 0..8 {
-        let a = rot + i as f32 / 8.0 * tau;
-        // a spoke: thin, swelling into a leaf before the rim
-        p.line_segment([at(a, r * 0.2), at(a, r * 0.72)], egui::Stroke::new(r * 0.022, brass(a + 1.57, 0.85)));
-        let (q, w) = (at(a, r * 0.56), egui::vec2(-a.sin(), a.cos()) * r * 0.045);
-        p.add(egui::Shape::convex_polygon(vec![at(a, r * 0.46), q + w, at(a, r * 0.7), q - w], brass(a + 1.57, 0.8), egui::Stroke::NONE));
-        // the knobs on the rim, between the spokes
-        let k = a + tau / 16.0;
-        p.circle_filled(at(k, r * 1.07), r * 0.045, brass(k, 0.95));
-        p.circle_filled(at(k, r * 1.07) - egui::vec2(r * 0.012, r * 0.012), r * 0.015, egui::Color32::from_rgba_unmultiplied(255, 248, 230, 0xa0));
-    }
-    p.circle_filled(c, r * 0.2, egui::Color32::from_rgb(0x14, 0x10, 0x12));
-    p.circle_stroke(c, r * 0.2, egui::Stroke::new(r * 0.035, brass(0.0, 0.95)));
-    p.circle_stroke(c, r * 0.1, egui::Stroke::new(r * 0.02, brass(3.0, 0.8)));
-}
-
-/// The logo: МЕЖДУ in polished metal, cut in two along a diagonal — silver (the dream) on the upper left, copper
-/// (the nightmare) on the lower right — a glint running over it now and then, and the turning wheel of samsara
-/// behind it. Clip rectangles are straight, so the word is drawn in thin horizontal bands: each band has its own
-/// colour of the metal and its own place of the cut and of the glint.
+/// The logo: МЕЖДУ in pixels, as the web title. Ж is torn along its rising diagonal (ZH_TEAR): the gold of the dream (М, Е and
+/// the upper left of Ж) is lifted by a pixel, the crimson of the nightmare (the lower right of Ж, Д, У) let down by a
+/// pixel: along the stepped tear the halves no longer meet. Every pixel is lit from above (a light top edge, a
+/// dark bottom edge, a hard shadow), and a glint runs over the word now and then.
 fn logo(ui: &mut egui::Ui, size: f32, t: f32) {
-    let font = egui::FontId::proportional(size);
-    let g = ui.painter().layout_no_wrap("МЕЖДУ".into(), font, egui::Color32::WHITE);
-    let gs = g.size();
-    let r = gs.y * 1.15;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(gs.x.max(2.3 * r) + size * 0.3, 2.3 * r), egui::Sense::hover());
-    let c = rect.center();
+    let ppp = ui.ctx().pixels_per_point();
+    // whole screen pixels per logo pixel: crisp edges
+    let px = ((size / 11.0) * ppp).round().max(2.0) / ppp;
+    let cols: usize = GLYPHS.iter().map(|g| g[0].len()).sum::<usize>() + TRACK * (GLYPHS.len() - 1);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(cols as f32 * px, 15.0 * px), egui::Sense::hover());
     let p = ui.painter();
-    wheel(p, c, r, t);
-    let pos = c - gs * 0.5;
-    // letters made heavier and given an edge: the same layout drawn around a small circle
-    let fat = (size * 0.022).max(1.0);
-    let ring: [egui::Vec2; 8] = std::array::from_fn(|i| {
-        let a = i as f32 / 8.0 * std::f32::consts::TAU;
-        egui::vec2(a.cos(), a.sin()) * fat
-    });
-    let draw = |p: &egui::Painter, off: egui::Vec2, col: egui::Color32| {
-        p.galley_with_override_text_color(pos + off, g.clone(), col);
-        for o in ring {
-            p.galley_with_override_text_color(pos + off + o, g.clone(), col);
-        }
-    };
-    draw(&p.with_clip_rect(rect), egui::vec2(size * 0.03, size * 0.05), egui::Color32::from_black_alpha(0xb0));
-    for o in [egui::vec2(-1.5, 0.0), egui::vec2(1.5, 0.0), egui::vec2(0.0, -1.5), egui::vec2(0.0, 1.5)] {
-        draw(&p.with_clip_rect(rect), o, egui::Color32::from_rgb(0x12, 0x0e, 0x10));
-    }
-    // the glint crosses every 5 s, slanted the other way than the cut
-    let sweep = (t % 5.0) / 1.6;
-    let glint_x = |y: f32| rect.left() - 40.0 + (rect.width() + 80.0) * sweep + (y - c.y) * 0.7;
-    let split_x = |y: f32| c.x - (y - c.y) * 0.55;
-    let (top, h) = (pos.y + gs.y * 0.12, gs.y * 0.78);
-    let n = 40;
-    for i in 0..n {
-        let (y0, y1) = (top + h * i as f32 / n as f32, top + h * (i + 1) as f32 / n as f32);
-        let v = (i as f32 + 0.5) / n as f32;
-        let ym = (y0 + y1) * 0.5;
-        let xs = split_x(ym);
-        let band = |x0: f32, x1: f32| p.with_clip_rect(egui::Rect::from_x_y_ranges(x0..=x1, y0..=y1 + 0.5));
-        draw(&band(rect.left(), xs), egui::Vec2::ZERO, ramp(&SILVER, v));
-        draw(&band(xs, rect.right()), egui::Vec2::ZERO, ramp(&COPPER, v));
-        // the cut itself: a dark hairline between the metals
-        draw(&band(xs - 1.0, xs + 1.0), egui::Vec2::ZERO, egui::Color32::from_rgb(0x10, 0x0c, 0x0e));
-        if sweep < 1.0 {
-            let xg = glint_x(ym);
-            draw(&band(xg - 14.0, xg + 14.0), egui::Vec2::ZERO, egui::Color32::from_rgba_unmultiplied(255, 252, 245, 0x50));
-            draw(&band(xg - 4.0, xg + 4.0), egui::Vec2::ZERO, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 0xd0));
+    let o = rect.min + egui::vec2(0.0, 2.0 * px);
+    // the glint: a slanted band crossing every 6 s
+    let sweep = (t % 6.0) / 1.4;
+    for pass in 0..2 {
+        let mut x0 = 0usize;
+        for (li, g) in GLYPHS.iter().enumerate() {
+            let w = g[0].len();
+            for (y, row) in g.iter().enumerate() {
+                for (x, ch) in row.bytes().enumerate() {
+                    if ch != b'#' {
+                        continue;
+                    }
+                    // which side of the tear: Ж is cut along x + y·w/11 = w (lower left → upper right)
+                    let night = match li {
+                        0 | 1 => false,
+                        2 => x >= ZH_TEAR[y],
+                        _ => true,
+                    };
+                    let lift = if night { 1.0 } else { -1.0 };
+                    let at = o + egui::vec2((x0 + x) as f32 * px, (y as f32 + lift) * px);
+                    let cell = egui::Rect::from_min_size(at, egui::vec2(px, px));
+                    if pass == 0 {
+                        // the hard shadow, down and to the right
+                        p.rect_filled(cell.translate(egui::vec2(px * 0.6, px * 0.8)), 0.0, egui::Color32::from_black_alpha(0xa0));
+                        continue;
+                    }
+                    let filled = |dy: i32| {
+                        let yy = y as i32 + dy;
+                        yy >= 0 && (yy as usize) < g.len() && g[yy as usize].as_bytes().get(x) == Some(&b'#')
+                    };
+                    let v = y as f32 / 10.0;
+                    let pal = if night { CRIMSON } else { GOLD };
+                    p.rect_filled(cell, 0.0, shade(pal, v, 1.0));
+                    let e = (px * 0.25).max(1.0 / ppp);
+                    if !filled(-1) {
+                        p.rect_filled(egui::Rect::from_min_size(at, egui::vec2(px, e)), 0.0, shade(pal, v, 1.25));
+                    }
+                    if !filled(1) {
+                        p.rect_filled(egui::Rect::from_min_size(at + egui::vec2(0.0, px - e), egui::vec2(px, e)), 0.0, shade(pal, v, 0.6));
+                    }
+                    if sweep < 1.0 {
+                        let gx = sweep * (cols as f32 + 22.0) - 11.0 + y as f32 * 0.6;
+                        let d = ((x0 + x) as f32 - gx).abs();
+                        if d < 1.6 {
+                            p.rect_filled(cell, 0.0, egui::Color32::from_rgba_unmultiplied(255, 250, 235, ((1.6 - d) / 1.6 * 150.0) as u8));
+                        }
+                    }
+                }
+            }
+            x0 += w + TRACK;
         }
     }
 }
@@ -273,16 +249,16 @@ fn progress_bar(ui: &mut egui::Ui, w: f32, frac: f32, t: f32, busy: bool) {
     p.rect_filled(track, h * 0.5, egui::Color32::from_rgba_unmultiplied(255, 245, 230, 0x14));
     let x1 = track.left() + w * frac.max(0.02);
     let fill = egui::Rect::from_x_y_ranges(track.left()..=x1, track.y_range());
-    p.rect_filled(fill.expand(3.0), h, ACCENT.gamma_multiply(0.10));
+    p.rect_filled(fill.expand(3.0), h, EMBER.gamma_multiply(0.12));
     let mut m = egui::Mesh::default();
-    for (x, c) in [(fill.left(), EMBER), (fill.right(), ACCENT)] {
+    for (x, c) in [(fill.left(), ACCENT), (fill.right(), EMBER)] {
         m.colored_vertex(egui::pos2(x, fill.top()), c);
         m.colored_vertex(egui::pos2(x, fill.bottom()), c);
     }
     m.add_triangle(0, 1, 2);
     m.add_triangle(1, 3, 2);
     p.with_clip_rect(fill).add(egui::Shape::mesh(m));
-    p.circle_filled(egui::pos2(x1, track.center().y), h * 0.5, ACCENT);
+    p.circle_filled(egui::pos2(x1, track.center().y), h * 0.5, EMBER);
     if busy {
         let x = fill.left() + fill.width() * (t * 0.7).fract();
         let glint = egui::Rect::from_x_y_ranges((x - 18.0).max(fill.left())..=(x + 18.0).min(fill.right()), track.y_range());
