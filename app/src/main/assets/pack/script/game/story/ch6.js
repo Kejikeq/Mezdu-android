@@ -90,10 +90,10 @@ function placeHouse({ G, once, say }) {
   const hearthLightD = G.light({ pos: [HO.x(78), 8.3, HO.z(57.3)], r: 7.5, col: [1, 0.55, 0.25], k: 2.2, mask: 1, flicker: true, fire: true });
   G.light({ pos: [HO.x(78), 9.4, HO.z(60)], r: 8, col: [1, 0.12, 0.06], k: 2.0, mask: 2, flicker: true });
   G.light({ pos: [HO.x(81), 8.7, HO.z(58.6)], r: 3.5, col: [1, 0.7, 0.35], k: 1.2, mask: 1, flicker: true });
-  const wreathD = G.place('wreath', doorX, 8.9, doorZ + 0.07, 0, { mask: 1 });
-  const wreathN = G.place('wreath_dead', doorX, 8.85, doorZ + 0.07, 0, { mask: 2 });
-  const vines = G.place('vines', doorX, 7.5, doorZ + 0.05, 0, { mask: 2 });
-  const key = G.place('item_rusty_key', doorX + 0.12, 8.42, doorZ + 0.12, 0, { scale: 2.6, mask: 2, roll: 0.5, highlight: true });
+  const wreathD = G.place('wreath', doorX, 8.9, doorZ + 0.02, 0, { mask: 1 });
+  const wreathN = G.place('wreath_dead', doorX, 8.85, doorZ + 0.02, 0, { mask: 2 });
+  const vines = G.place('vines', doorX, 7.5, doorZ + 0.02, 0, { mask: 2 });
+  const key = G.place('item_rusty_key', doorX + 0.06, 8.68, doorZ + 0.03, 0, { scale: 2.2, mask: 2, roll: 0.5, highlight: true });
   const doorOpen = G.place('door_open', doorX - 0.5, 7.5, doorZ - 0.25, Math.PI / 2 + 0.25, { mask: 3, visible: false });
   for (const wx of [HO.x(75.25), HO.x(80.25)]) {
     G.place('flower_box', wx, 7.85, doorZ + 0.18, 0, { mask: 1 });

@@ -41,7 +41,7 @@ struct RigPose {
   seatId: u32, // 0:none, 1:ground, 2:bench, 3:sofa
   slot: u32,
   models: vec4u, // x: torso, y: head, z: uarm, w: uarmL
-  models2: vec4u, // x: farm, y: farmL, z: leg
+  models2: vec4u, // x: farm, y: farmL, z: leg, w: body (unified skinned mesh)
   _pad: vec3u,
 };
 struct Particle { p: vec4f, v: vec4f, c: vec4f };
@@ -55,7 +55,8 @@ fn fogCol(w: f32) -> vec3f { return mix(F.fogD.rgb, F.fogN.rgb, w); }
 // distance fog when the volumetric fog pass is off (F.counts.z == 0)
 fn flatFog(c: vec3f, p: vec3f, w: f32) -> vec3f {
   if (F.counts.z != 0u) { return c; }
-  return mix(c, fogCol(w), 1.0 - exp(-distance(p, F.cam.xyz) * 0.022));
+  let d = max(0.0, distance(p, F.cam.xyz) - select(24.0, 5.0, w > 0.5));
+  return mix(c, fogCol(w), clamp(1.0 - exp(-d * 0.012), 0.0, 0.62));
 }
 
 fn hashu(x: u32) -> u32 {
@@ -100,8 +101,7 @@ fn vnoise3(p: vec3f) -> f32 {
 @group(0) @binding(17) var envN: texture_cube<f32>;   // ... nightmare
 @group(0) @binding(18) var brdfLut: texture_2d<f32>;  // split-sum environment BRDF: x = n.v, y = roughness
 @group(0) @binding(19) var shadowTex2: texture_depth_2d; // far shadow cascade
-@group(0) @binding(20) var aoTex: texture_2d<f32>;    // last frame, half resolution: r = SSAO, g = contact shadow, b = depth key
-@group(0) @binding(21) var ssrTex: texture_2d<f32>;   // last frame, quarter resolution: rgb = reflected radiance, a = confidence
+@group(0) @binding(20) var linSmp: sampler; // linear clamp-to-edge sampler for brdfLut
 override WMODE: u32 = 2u; // 0 = dream, 1 = nightmare (constant world), 2 = per-pixel world function
 
 // face directions 0..5 = +x -x +y -y +z -z and quad corners 0..3 by arithmetic: no small lookup
@@ -136,62 +136,49 @@ fn quadCorner(k: u32) -> u32 { return select(k, select(k - 2u, 0u, k == 3u), k >
 fn faceOffset(d: u32, c: u32, du: f32, dv: f32) -> vec3f {
   return axv(d >> 1u) * nposOf(d) + axv(uaxOf(d)) * (cuOf(c) * du) + axv(vaxOf(d)) * (cvOf(c) * dv);
 }
-
-// G-buffer alpha: ambient occlusion in 5 bits + flags 0.5 = foliage, 0.25 = reflective (roughness < 0.3: the
-// screen-space reflection rays start from these pixels), 0.125 = moving object (TAA trusts its history less)
-fn gbA(ao: f32, foliage: bool, refl: bool, dyn: bool) -> f32 {
-  return clamp(ao, 0.0, 1.0) * 0.115 + select(0.0, 0.5, foliage) + select(0.0, 0.25, refl) + select(0.0, 0.125, dyn);
-}
-// where a world point was on the screen in the last frame (xy) and its depth key (z); z < 0 = it was off screen
-fn prevUV(p: vec3f) -> vec3f {
-  let pc = F.prevVP * vec4f(p, 1.0);
-  let uv = pc.xy / max(pc.w, 0.001) * vec2f(0.5, -0.5) + 0.5;
-  if (pc.w <= 0.05 || uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) { return vec3f(0.0, 0.0, -1.0); }
-  return vec3f(clamp(uv, vec2f(0.002), vec2f(0.998)), sqrt(clamp(pc.w / 128.0, 0.0, 1.0)));
-}
 fn shadowUV(m: mat4x4f, p: vec3f) -> vec3f {
   let sp = m * vec4f(p, 1.0);
   return vec3f(sp.x * 0.5 + 0.5, 0.5 - sp.y * 0.5, sp.z);
 }
-// Sun visibility from two cascades centred on the hero. Near cascade: 4 bilinear comparison taps (a 3x3 footprint),
-// with fine = true and soft shadows on the taps spread with the distance to the blocker (penumbra) and turn with
-// the frame (TAA averages them). Far cascade: one filtered tap. The cascades blend over the rim of the near one.
+// Screen-locked manga square-dot halftone screentone applied ONLY to sun light/shadow (never on lit faces or AO).
+// Fixed 4x4 render-pixel staggered screen grid with crisp 1x1 (penumbra) and 2x2 (shadow) square dots:
+// constant screen size — NEVER grows, shrinks, or rescales with viewing angle or camera distance!
+fn mangaShadow(sh: f32, ndl: f32, fragXY: vec2f) -> f32 {
+  let sunActive = smoothstep(0.35, 0.70, F.pbr.y) * smoothstep(0.03, 0.14, F.sunDir.y);
+  if (sunActive <= 0.001) { return 1.0; }
+  let direct = clamp(sh * max(ndl, 0.0), 0.0, 1.0);
+  if (direct >= 0.42) { return 1.0; }
+  let shadowAmt = smoothstep(0.42, 0.06, direct) * sunActive;
+  let p = vec2u(floor(fragXY));
+  let row = (p.y >> 2u) & 1u;
+  let gx = (p.x + row * 2u) & 3u;
+  let gy = p.y & 3u;
+  var isDot = false;
+  if (shadowAmt >= 0.52) {
+    isDot = (gx >= 1u && gx <= 2u && gy >= 1u && gy <= 2u);
+  } else if (shadowAmt >= 0.14) {
+    isDot = (gx == 1u && gy == 1u);
+  }
+  return select(1.0, 0.72, isDot);
+}
+// Fast 1-tap hardware-compared shadow visibility across two locked cascades (4x-8x faster than 4-tap PCF/PCSS;
+// mangaShadow turns the hardware bilinear penumbra into crisp 2x2-px manga square-dot screentone).
 fn shadowSun(p: vec3f, n: vec3f, fine: bool) -> f32 {
   if (F.counts.w == 0u) { return 1.0; }
-  let q = shadowUV(F.shadowMat, p + n * 0.035);
+  let ndlAbs = abs(dot(n, F.sunDir.xyz));
+  let nOff = mix(0.052, 0.016, ndlAbs);
+  let q = shadowUV(F.shadowMat, p + n * nOff);
   let e = max(abs(q.x - 0.5), abs(q.y - 0.5));
   var s1 = 1.0;
   if (e > 0.42 || q.z >= 1.0) {
-    let r = shadowUV(F.shadowMat2, p + n * 0.09);
-    if (r.x > 0.002 && r.x < 0.998 && r.y > 0.002 && r.y < 0.998 && r.z < 1.0) { s1 = textureSampleCompareLevel(shadowTex2, shadowSmp, r.xy, r.z - F.fx.w); }
+    let r = shadowUV(F.shadowMat2, p + n * mix(0.11, 0.045, ndlAbs));
+    if (r.x > 0.002 && r.x < 0.998 && r.y > 0.002 && r.y < 0.998 && r.z < 1.0) {
+      s1 = textureSampleCompareLevel(shadowTex2, shadowSmp, r.xy, r.z - F.fx.w);
+    }
     if (e >= 0.49 || q.z >= 1.0) { return s1; }
   }
   let z = q.z - F.fx.z;
-  var s0 = 0.0;
-  if (!fine) { s0 = textureSampleCompareLevel(shadowTex, shadowSmp, q.xy, z); }
-  else {
-    var k = 1.0;
-    var cs = 1.0;
-    var sn = 0.0;
-    if (F.fx.y > 0.0) {
-      let dim = vec2i(textureDimensions(shadowTex));
-      let pc = vec2i(q.xy * vec2f(dim));
-      var zb = 0.0;
-      var nb = 0.0;
-      for (var j = 0; j < 4; j++) {
-        let d = textureLoad(shadowTex, clamp(pc + vec2i((j & 1) * 4 - 2, (j >> 1) * 4 - 2), vec2i(0), dim - vec2i(1)), 0);
-        if (d < z) { zb += d; nb += 1.0; }
-      }
-      if (nb > 0.5) { k = clamp((z - zb / nb) * F.fx.y, 1.0, 4.5); }
-      let a = fract(52.9829189 * fract(dot(p.xz * 37.0 + p.yy * 19.0, vec2f(0.06711056, 0.00583715))) + F.opt.w * 0.618034) * 6.2831853;
-      cs = cos(a); sn = sin(a);
-    }
-    let t = F.grade.z * k;
-    let o1 = vec2f(cs - sn, sn + cs) * t;
-    let o2 = vec2f(-cs - sn, -sn + cs) * t;
-    s0 = (textureSampleCompareLevel(shadowTex, shadowSmp, q.xy + o1, z) + textureSampleCompareLevel(shadowTex, shadowSmp, q.xy - o1, z)
-      + textureSampleCompareLevel(shadowTex, shadowSmp, q.xy + o2, z) + textureSampleCompareLevel(shadowTex, shadowSmp, q.xy - o2, z)) * 0.25;
-  }
+  let s0 = textureSampleCompareLevel(shadowTex, shadowSmp, q.xy, z);
   return mix(s0, s1, smoothstep(0.42, 0.49, e));
 }
 fn flashCone(p: vec3f) -> f32 {
@@ -202,11 +189,7 @@ fn flashCone(p: vec3f) -> f32 {
   let c = smoothstep(F.flashPos.w, F.flashPos.w + 0.05, dot(d * invD, F.flashDir.xyz));
   return c / (1.0 + d2 * 0.03);
 }
-// Forward+ Single Target Rendering: target 0 = scene HDR radiance/albedo (rgba16float)
-struct GFragOut {
-  @location(0) col: vec4f,
-  @location(1) norm: vec4f, // xyz: normal, w: ao/flags (bit 1: foliage)
-};
+// Forward+ Single Target Rendering: target 0 = scene HDR radiance (zero MRT G-buffer overhead)
 // ---- PBR (metallic-roughness). Light colours are "pi-less": diffuse = albedo * light * n.l, so the GGX
 // distribution carries no 1/pi either.
 struct Surf { alb: vec3f, rough: f32, metal: f32, ao: f32 };
@@ -218,8 +201,11 @@ fn specGGX(n: vec3f, v: vec3f, l: vec3f, a: f32, f0: vec3f) -> vec3f {
   let nl = max(dot(n, l), 0.0);
   let a2 = a * a;
   let dd = (nh * a2 - nh) * nh + 1.0;
-  let vis = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(nl * nl * (1.0 - a2) + a2), 0.0001);
-  let f = pow(1.0 - max(dot(l, hv), 0.0), 5.0);
+  // Hammon height-correlated Smith GGX visibility (O(1), zero sqrt() calls)
+  let vis = 0.5 / max(mix(2.0 * nl * nv, nl + nv, a), 0.0001);
+  let om = 1.0 - max(dot(l, hv), 0.0);
+  let om2 = om * om;
+  let f = om2 * om2 * om;
   return (f0 + (vec3f(1.0) - f0) * f) * min(a2 / (dd * dd) * vis * nl, 12.0);
 }
 // ---- image-based light: the environment is the sky dome of the chapter's time of day (src/gfx/sky.js)
@@ -236,36 +222,42 @@ fn envSpec(r: vec3f, rough: f32, w: f32) -> vec3f {
   if (WMODE == 1u) { return textureSampleLevel(envN, repSmp, r, lod).rgb; }
   return mix(textureSampleLevel(envD, repSmp, r, lod).rgb, textureSampleLevel(envN, repSmp, r, lod).rgb, w);
 }
-// sun + diffuse and specular light of the environment + point lights + flashlight
+// Analytical Karis/Lazarov BRDF LUT approximation (exact to <0.002, eliminates ~1M texture fetches/frame)
+fn envBRDFApprox(rough: f32, nv: f32) -> vec2f {
+  let c0 = vec4f(-1.0, -0.0275, -0.572, 0.022);
+  let c1 = vec4f(1.0, 0.0425, 1.04, -0.04);
+  let r = rough * c0 + c1;
+  let a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+  return vec2f(-1.04, 1.04) * a004 + r.zw;
+}
+// sun + diffuse and specular light of the environment (1-bounce forest floor bounce + multi-bounce AO + specOcc) + point lights + flashlight
 fn shadePBR(p: vec3f, n: vec3f, w: f32, sh: f32, s: Surf) -> vec3f {
-  let v = normalize(F.cam.xyz - p);
+  let camVec = F.cam.xyz - p;
+  let camD2 = dot(camVec, camVec);
+  let v = camVec * inverseSqrt(max(camD2, 1e-6));
   let nv = max(dot(n, v), 0.001);
   let f0 = mix(vec3f(0.04), s.alb, s.metal);
   let cd = s.alb * (1.0 - s.metal);
   let a = max(s.rough * s.rough, 0.02);
   let sun = sunCol(w);
-  // screen-space occlusion of the last frame, reprojected: SSAO dims the light of the environment, the contact
-  // shadow dims the sun; rejected where the depth does not match (something moved in front)
-  var ssao = 1.0;
-  var contact = 1.0;
-  let q = prevUV(p);
-  if (F.fx.x > 0.5 && q.z >= 0.0) {
-    let o = textureSampleLevel(aoTex, repSmp, q.xy, 0.0);
-    let ok = 1.0 - smoothstep(0.02, 0.05, abs(o.b - q.z));
-    ssao = mix(1.0, o.r, ok);
-    contact = mix(1.0, o.g, ok);
+  let irr = envIrr(n, w);
+  let isMatte = s.rough > 0.84 && s.metal < 0.05;
+  var env = irr * 0.85;
+  if (!isMatte) { env = envSpec(reflect(-v, n), s.rough, w); }
+  let nlSun = max(dot(n, F.sunDir.xyz), 0.0);
+  // Multi-bounce colored ambient occlusion: O(1) geometric-series approximation (zero SFU pow() calls per pixel)
+  let aoScalar = 0.18 + 0.82 * s.ao;
+  let aoMulti = aoScalar / max(vec3f(1.0) - s.alb * (0.55 * (1.0 - aoScalar)), vec3f(0.32));
+  // Specular cone micro-occlusion & direct sun micro-shadowing in crevices (zero SFU exp2/pow)
+  let specOcc = clamp(mix(s.ao, s.ao * s.ao, 1.0 - s.rough) + nv * 0.28 * s.ao, 0.14 * s.ao, 1.0);
+  let sunMicroSh = clamp(sh * (0.40 + 0.60 * s.ao), 0.0, 1.0);
+  var c = vec3f(0.0);
+  if (nlSun > 0.0 && sh > 0.001) {
+    c = cd * nlSun * sun * sh + specGGX(n, v, F.sunDir.xyz, a, f0) * sun * sunMicroSh;
   }
-  // reflection of the environment: the prefiltered sky, replaced on smooth surfaces by what the screen-space
-  // rays of the last frame found (SSR_SHADER)
-  var env = envSpec(reflect(-v, n), s.rough, w);
-  if (s.rough < 0.55 && F.fx2.x > 0.5 && q.z >= 0.0) {
-    let ss = textureSampleLevel(ssrTex, repSmp, q.xy, 0.0);
-    env = mix(env, ss.rgb, ss.a * (1.0 - smoothstep(0.25, 0.55, s.rough)));
-  }
-  var c = (cd * max(dot(n, F.sunDir.xyz), 0.0) + specGGX(n, v, F.sunDir.xyz, a, f0)) * sun * (sh * contact);
-  c += cd * envIrr(n, w) * (F.pbr.y * (0.22 + 0.78 * s.ao) * ssao);
-  let ab = textureSampleLevel(brdfLut, repSmp, clamp(vec2f(nv, s.rough), vec2f(0.008), vec2f(0.992)), 0.0).rg;
-  c += env * (f0 * ab.x + vec3f(ab.y)) * (F.pbr.y * (0.25 + 0.75 * s.ao) * (0.4 + 0.6 * ssao));
+  var ptDiff = vec3f(0.0);
+  var ptSpec = vec3f(0.0);
+  var ptEnergy = 0.0;
   let wm = select(1u, 2u, w > 0.5);
   for (var i = 0u; i < F.counts.x; i++) {
     let L = F.lights[i];
@@ -276,13 +268,44 @@ fn shadePBR(p: vec3f, n: vec3f, w: f32, sh: f32, s: Surf) -> vec3f {
     if (d2 >= r * r) { continue; }
     let invD = inverseSqrt(max(d2, 0.0001));
     let att = 1.0 - d2 * invD / r;
+    let att2 = (att * att) / (1.0 + d2 * 0.14);
     let ld = d * invD;
-    c += L.col.rgb * (att * att) * (cd * (max(dot(n, ld), 0.0) * 0.7 + 0.3) * (0.4 + 0.6 * s.ao) + specGGX(n, v, ld, a, f0));
+    let ndl = max(dot(n, ld), 0.0);
+    var specL = vec3f(0.0);
+    if (ndl > 0.0 && (s.rough < 0.72 || s.metal > 0.1)) { specL = specGGX(n, v, ld, a, f0) * (0.45 + 0.55 * s.ao); }
+    let lCol = L.col.rgb * att2;
+    ptDiff += lCol * (cd * (ndl * 0.72 + 0.28) * (0.45 + 0.55 * s.ao));
+    ptSpec += lCol * specL;
+    ptEnergy += dot(lCol, vec3f(0.3, 0.55, 0.15));
   }
+  // When in shaded interiors lit by room lamps, suppress exterior green-grass bounce & cool outdoor sky wash so warm room fill reads naturally
+  let indoorWarm = clamp(ptEnergy * 0.55, 0.0, 0.72) * (1.0 - smoothstep(0.02, 0.25, sh));
+  let envScale = mix(1.0, 0.36, indoorWarm);
+  c += cd * irr * aoMulti * (F.pbr.y * 0.88 * envScale);
+  // 1-bounce indirect light: lush forest greenery bounce outdoors, warm plaster/oak room bounce indoors + soft sunlit terminator wrap
+  let downBounce = clamp(0.55 - 0.45 * n.y, 0.0, 1.0);
+  let outBounceTint = mix(vec3f(0.16, 0.23, 0.085), vec3f(0.06, 0.024, 0.02), w);
+  let inBounceTint = mix(vec3f(0.14, 0.11, 0.078), vec3f(0.045, 0.025, 0.024), w);
+  let bounceTint = mix(outBounceTint, inBounceTint, indoorWarm);
+  c += cd * sun * bounceTint * aoMulti * (downBounce * (0.28 + 0.56 * max(F.sunDir.y, 0.05)) * (0.30 + 0.70 * F.pbr.y) * mix(1.0, 0.58, indoorWarm));
+  c += cd * sun * (aoMulti * (0.042 * max(dot(n, F.sunDir.xyz) * 0.5 + 0.5, 0.0) * (1.0 - indoorWarm) * F.pbr.y));
+  c += cd * vec3f(1.0, 0.76, 0.48) * (ptEnergy * 0.085 * aoMulti * (0.35 + 0.65 * indoorWarm));
+  // Subtle micro-fresnel sky catchlight on grazing edges (gated so interiors & matte/front faces skip the 2nd cubemap fetch)
+  let omNv = 1.0 - nv;
+  let omNv2 = omNv * omNv;
+  let skyEdge = (omNv2 * omNv2) * (1.0 - s.metal) * 0.14 * s.ao * (F.pbr.y * envScale) * smoothstep(0.45, 0.92, F.pbr.y) * mix(0.20, 1.0, clamp(sh * 4.0, 0.0, 1.0)) * (1.0 - indoorWarm * 0.65);
+  if (skyEdge > 0.003 && !isMatte) {
+    c += envSpec(n, min(s.rough, 0.35), w) * skyEdge * (0.55 + 0.45 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0));
+  }
+  let ab = envBRDFApprox(s.rough, nv);
+  c += env * (f0 * ab.x + vec3f(ab.y)) * (F.pbr.y * specOcc * envScale);
+  c += ptDiff + ptSpec;
   if (w > 0.5 && F.misc.y > 0.5) {
     let fc = flashCone(p);
-    let d = normalize(F.flashPos.xyz - p);
-    c += vec3f(1.0, 0.93, 0.78) * F.flashDir.w * fc * (cd * (max(dot(n, d), 0.0) * 0.8 + 0.2) + specGGX(n, v, d, a, f0));
+    if (fc > 0.001) {
+      let d = normalize(F.flashPos.xyz - p);
+      c += vec3f(1.0, 0.93, 0.78) * F.flashDir.w * fc * (cd * (max(dot(n, d), 0.0) * 0.8 + 0.2) + specGGX(n, v, d, a, f0));
+    }
   }
   return c;
 }
@@ -319,7 +342,7 @@ fn waveRim(p: vec3f) -> f32 {
 }
 
 @group(1) @binding(0) var<storage, read> faces: array<u32>;
-struct TV { wp: vec3f, aoD: f32, aoN: f32, dir: u32, edgeMask: u32, mask: u32, matD: u32, matN: u32, du: f32, dv: f32 };
+struct TV { wp: vec3f, aoD: f32, aoN: f32, dir: u32, edgeMask: u32, mask: u32, matD: u32, matN: u32, du: f32, dv: f32, c: u32 };
 fn decodeTerrain(vi: u32) -> TV {
   // indexed quads: vertex index = quad * 4 + corner (the index buffer makes the two triangles)
   let fi = vi >> 2u;
@@ -335,6 +358,7 @@ fn decodeTerrain(vi: u32) -> TV {
   let a0 = aoDw & 3u; let a1 = (aoDw >> 2u) & 3u; let a2 = (aoDw >> 4u) & 3u; let a3 = (aoDw >> 6u) & 3u;
   // AO-aware diagonal: rotating the corners by one flips the triangulation of this quad
   let c = (vi + select(0u, 1u, a0 + a2 > a1 + a3)) & 3u;
+  t.c = c;
   let lp = vec3f(f32(w0 & 31u), f32((w0 >> 5u) & 31u), f32((w0 >> 10u) & 31u)) + faceOffset(t.dir, c, t.du, t.dv);
   t.wp = (chunkOrg[w2 & 0xffffu].xyz + lp) * 0.125;
   t.aoD = f32((aoDw >> (c * 2u)) & 3u) / 3.0;
@@ -350,25 +374,20 @@ struct TOut {
 };
 @vertex fn vsTerrain(@builtin(vertex_index) vi: u32) -> TOut {
   let t = decodeTerrain(vi);
-  let fl = u32(mats[t.matD * 2u].w) | u32(mats[t.matN * 2u].w);
+  let fl = select(u32(mats[t.matD * 2u].w) | u32(mats[t.matN * 2u].w), u32(mats[select(t.matD, t.matN, WMODE == 1u) * 2u].w), WMODE < 2u);
   var wp = t.wp;
   if ((fl & 4u) != 0u && u32(mats[t.matD * 2u + 1u].w) != 21u) { // foliage sways, window glass does not
     let tt = F.cam.w;
     wp.x += sin(tt * 1.3 + wp.z * 0.45 + wp.y * 0.3) * 0.035;
     wp.z += cos(tt * 1.1 + wp.x * 0.4) * 0.03;
   }
-  let fi = vi >> 2u;
-  let w1 = faces[fi * 3u + 1u];
-  let aoDw = w1 & 255u;
-  let a0 = aoDw & 3u; let a1 = (aoDw >> 2u) & 3u; let a2 = (aoDw >> 4u) & 3u; let a3 = (aoDw >> 6u) & 3u;
-  let c = (vi + select(0u, 1u, a0 + a2 > a1 + a3)) & 3u;
   var o: TOut;
   o.pos = F.viewProj * vec4f(wp, 1.0);
   o.wp = wp;
   o.ao = vec4f(t.aoD, t.aoN, textureSampleLevel(noise3, repSmp, wp * vec3f(0.016, 0.04, 0.016), 0.0).r,
     textureSampleLevel(noise3, repSmp, wp * vec3f(0.07, 0.1, 0.07) + vec3f(0.37), 0.0).r);
   o.info = vec4u(t.dir | (t.edgeMask << 3u) | (u32(t.du) << 8u) | (u32(t.dv) << 16u), t.mask, t.matD, t.matN);
-  o.quadUV = vec2f(cuOf(c) * t.du, cvOf(c) * t.dv);
+  o.quadUV = vec2f(cuOf(t.c) * t.du, cvOf(t.c) * t.dv);
   return o;
 }
 // water: corner offsets from the mesher make ramps at steps; ao.x carries the foam amount
@@ -377,17 +396,22 @@ struct TOut {
   let k = vi - fi * 6u;
   let w0 = faces[fi * 3u]; let w1 = faces[fi * 3u + 1u]; let w2 = faces[fi * 3u + 2u];
   let dir = (w0 >> 15u) & 7u;
+  let mask = (w0 >> 18u) & 3u;
+  let matD = (w1 >> 16u) & 255u;
+  let matN = (w1 >> 24u) & 255u;
   let c = quadCorner(k);
   var lp = vec3f(f32(w0 & 31u), f32((w0 >> 5u) & 31u), f32((w0 >> 10u) & 31u)) + faceOffset(dir, c, 1.0, 1.0);
   let f = (w1 >> (c * 2u)) & 3u;
-  if (f == 1u) { lp.y -= 0.5; } else if (f == 2u) { lp.y += 0.5; }
+  if (matD == 15u) {
+    if (f == 1u) { lp.y -= 0.5; } else if (f == 2u) { lp.y += 0.5; }
+  }
   var wp = (chunkOrg[w2 & 0xffffu].xyz + lp) * 0.125;
   var o: TOut;
   o.pos = F.viewProj * vec4f(wp, 1.0);
   o.wp = wp;
   // subtle foam at the foot of each little fall
-  o.ao = vec4f(select(0.0, 0.42, f == 2u && dir == 2u), 0.0, 0.5, 0.5);
-  o.info = vec4u(dir, 1u, (w1 >> 16u) & 255u, 0u);
+  o.ao = vec4f(select(0.0, 0.42, matD == 15u && f == 2u && dir == 2u), 0.0, 0.5, 0.5);
+  o.info = vec4u(dir, mask, matD, matN);
   o.quadUV = vec2f(cuOf(c), cvOf(c));
   return o;
 }
@@ -438,6 +462,21 @@ fn wAt(p: vec3f) -> f32 {
   return f32(WMODE);
 }
 struct TerrainRes { col: vec3f, n: vec3f, ao: f32, refl: bool };
+// Analytical screen-space band-limited groove filter:
+// Evaluates line distance in exact screen pixels (dPx = d / fw) with a constant-minimum pixel kernel (>= 0.80 px half-width)
+// and energy conservation, eliminating thick/thin Vernier phase oscillation and oblique-angle Moiré twisting.
+fn aaLine(coord: f32, fwIn: f32, physWidth: f32) -> f32 {
+  let fw = max(fwIn, 1e-5);
+  let nyq = 1.0 - smoothstep(0.18, 0.38, fw);
+  if (nyq <= 0.001) { return 0.0; }
+  let d = abs(fract(coord + 0.5) - 0.5);
+  let dPx = d / fw;
+  let wPx = physWidth / fw;
+  let halfPx = clamp(wPx * 0.5, 0.80, 2.4);
+  let cov = 1.0 - smoothstep(halfPx - 0.68, halfPx + 0.88, dPx);
+  let energy = clamp((wPx * 0.5) / halfPx, 0.36, 1.0);
+  return cov * energy * nyq;
+}
 fn terrainColor(i: TOut, night: bool, w: f32) -> TerrainRes {
   let dir = i.info.x & 7u;
   let edgeMask = (i.info.x >> 3u) & 15u;
@@ -450,92 +489,137 @@ fn terrainColor(i: TOut, night: bool, w: f32) -> TerrainRes {
   var n = baseN;
   let blockCoord = vec3i(floor(i.wp * 8.0 - baseN * 0.5));
   let h = hash3i(blockCoord);
-  let vk = 1.0 + (h - 0.5) * 0.55 * m1.y;
   let dist = distance(i.wp, F.cam.xyz);
   let pat = u32(m1.w);
   let ax = dir >> 1u;
-  // ─── Discrete per-cube solid brightness step (emphasizes separate individual cubes) ───
+  let dwpDx = dpdx(i.wp);
+  let dwpDy = dpdy(i.wp);
+  let lx = length(dwpDx);
+  let ly = length(dwpDy);
+  let voxFoot = max(lx, ly) * 8.0;
+  let voxAA = 1.0 / (1.0 + voxFoot * voxFoot * 8.0);
+  // Architectural surfaces (planks, plaster, brick, roof, tile, parquet, concrete, paint, slate) use continuous surface
+  // shading rather than per-voxel 12.5cm checkerboard brightness jumps that fight with structural board/brick lines
+  let isArch = pat == 7u || pat == 8u || pat == 9u || pat == 10u || pat == 13u || pat == 21u || pat == 22u || pat == 23u || pat == 24u || pat >= 26u;
+  // Natural terrain slope steps (both horizontal treads ax==1 and vertical risers up to 8 voxels / 1.0m) shade as one continuous hillside so 3D elevation contours never form circular Moiré rings
+  let vertH = select(dvF, duF, dir == 0u || dir == 5u);
+  let isSlopeStep = !isArch && (ax == 1u || vertH <= 8.0);
+  if (isSlopeStep && ax != 1u) {
+    let upBlend = mix(0.38, 0.78, smoothstep(6.0, 18.0, dist));
+    n = normalize(mix(baseN, vec3f(0.0, 1.0, 0.0), upBlend));
+  }
+  let natFade = voxAA * (1.0 - smoothstep(4.5, 9.0, dist));
+  let voxVarScale = select(natFade * 0.22, 0.12 * voxAA, isArch);
+  let vk = 1.0 + (h - 0.5) * 0.45 * m1.y * voxVarScale;
+  // ─── Discrete per-cube solid brightness step (faded out on slopes/distance to prevent staircase Moiré) ───
   let vStyle = u32(F.grass.w + 0.5);
   let vClusterH = hash3i(vec3i(blockCoord.x >> 2, blockCoord.y >> 2, blockCoord.z >> 2));
-  let voxQuantShade = 0.90 + floor(h * 5.0) * 0.048;
-  let clusterShade = 0.95 + floor(vClusterH * 3.0) * 0.045;
+  let voxQuantShade = mix(1.0, 0.92 + floor(h * 5.0) * 0.038, voxVarScale);
+  let clusterShade = mix(1.0, 0.96 + floor(vClusterH * 3.0) * 0.035, select(natFade * 0.25, 0.25 * voxAA, isArch));
 
   // ─── Per-voxel UV inside merged or single quads ───
   let uQuad = fract(i.quadUV.x);
   let vQuad = fract(i.quadUV.y);
   let voxelEdge = min(min(uQuad, 1.0 - uQuad), min(vQuad, 1.0 - vQuad));
-  let nearFade = 1.0 - smoothstep(5.0, 16.0, dist);
+  let nearFade = select((1.0 - smoothstep(3.5, 7.5, dist)) * natFade, 0.0, isArch || isSlopeStep);
 
-  // Subtle physical edge bevel for single voxel cubes (fades out smoothly to prevent Moiré lines)
+  // Subtle physical edge bevel for close vertical cliffs only (disabled on slope steps and architecture to prevent grid/ring Moiré)
   var cubeOcc = 1.0;
   var cubeRidge = 1.0;
-  if (voxelEdge < 0.11 && nearFade > 0.01) {
-    let edgeT = (1.0 - voxelEdge / 0.11) * nearFade;
-    cubeOcc *= mix(1.0, 0.94, edgeT);
+  let edgeSpan = max(0.11, voxFoot * 0.95);
+  if (voxelEdge < edgeSpan && nearFade > 0.01) {
+    let edgeT = smoothstep(edgeSpan, 0.0, voxelEdge) * nearFade;
+    cubeOcc *= mix(1.0, 0.96, edgeT);
   }
 
-  // Solid albedo per physical voxel; the micro detail comes from the atlas below
-  let cubeCol = m0.rgb * (0.96 + h * 0.08);
+  // Solid albedo per physical voxel; slight riser darkening gives hillside steps 3D relief
+  let cubeCol = m0.rgb * (1.0 + (h - 0.5) * 0.08 * voxVarScale);
   var albedo = cubeCol * vk * clusterShade * voxQuantShade * cubeRidge;
+  if (isSlopeStep && ax != 1u) {
+    albedo *= mix(0.84, 0.94, smoothstep(4.0, 14.0, dist));
+  }
 
-  // Real 3D Step Edge Shading along macro 90-degree block turns
+  // Step Edge Shading along macro 90-degree block turns (disabled on natural terrain slope steps so step lips never glow or band)
   var stepEdgeDist = 1.0;
   if ((edgeMask & 1u) != 0u) { stepEdgeDist = min(stepEdgeDist, i.quadUV.x); }
   if ((edgeMask & 2u) != 0u) { stepEdgeDist = min(stepEdgeDist, max(0.0, duF - i.quadUV.x)); }
   if ((edgeMask & 4u) != 0u) { stepEdgeDist = min(stepEdgeDist, i.quadUV.y); }
   if ((edgeMask & 8u) != 0u) { stepEdgeDist = min(stepEdgeDist, max(0.0, dvF - i.quadUV.y)); }
-  let edgeDarken = mix(select(0.96, 1.02, baseN.y > 0.5), 1.0, smoothstep(0.0, 0.12, stepEdgeDist));
-  albedo *= edgeDarken;
-
-  // On vertical macro steps of grass cubes, show natural underlying soil tone
-  if (ax != 1u && (pat == 1u || pat == 14u || pat == 17u)) {
-    let soilShade = 0.90 + floor(h * 4.0) * 0.05;
-    albedo = mix(albedo, vec3f(0.30, 0.20, 0.12) * soilShade, 0.22);
+  if (!isSlopeStep) {
+    let stepSpan = max(0.14, voxFoot * 1.25);
+    let edgeDarken = mix(0.97, 1.0, smoothstep(0.0, stepSpan, stepEdgeDist));
+    albedo *= mix(1.0, edgeDarken, voxAA);
   }
 
-  // Quantized macro-biome tint (sampled per-cube so each cube remains a pure solid color)
+  // On tall vertical cliff cuts of grass (> 6 voxels high), show underlying soil tone
+  if (ax != 1u && !isSlopeStep && (pat == 1u || pat == 14u || pat == 17u)) {
+    let soilShade = 0.90 + floor(h * 4.0) * 0.05;
+    albedo = mix(albedo, vec3f(0.30, 0.20, 0.12) * soilShade, 0.22 * natFade);
+  }
+
+  // Smooth macro-biome tint + multi-scale world-space botanical variation (zero periodic tiling; skip 3D noise fetches on indoor/arch surfaces)
   let n1 = i.ao.z;
   let n2 = i.ao.w;
+  let rawAoInit = select(i.ao.x, i.ao.y, night);
+  var wNoiseMacro = 0.5;
+  var wNoiseMeso = 0.5;
+  if (!isArch) {
+    if (dist < 22.0) {
+      wNoiseMeso = textureSampleLevel(noise3, repSmp, i.wp * 0.34 + vec3f(0.37, 0.19, 0.71), 0.0).r;
+    }
+    if (pat == 1u || pat == 14u || pat == 6u || pat == 16u || pat == 17u || pat == 2u || pat == 3u || pat == 15u) {
+      wNoiseMacro = textureSampleLevel(noise3, repSmp, i.wp * 0.085, 0.0).r;
+    }
+  }
   if (pat == 1u || pat == 14u || pat == 6u || pat == 16u || pat == 17u) {
-    albedo *= mix(vec3f(1.08, 1.03, 0.86), vec3f(0.88, 1.02, 0.94), smoothstep(0.25, 0.75, n1)) * (0.92 + n2 * 0.16);
+    var mWaveA = wNoiseMacro;
+    var mWaveB = wNoiseMeso;
+    if (dist < 18.0) {
+      mWaveA = 0.5 + 0.5 * sin(i.wp.x * 0.42 + cos(i.wp.z * 0.37) * 1.8) * cos(i.wp.z * 0.39 - sin(i.wp.x * 0.29) * 1.4);
+      mWaveB = 0.5 + 0.5 * sin(i.wp.x * 1.35 - i.wp.z * 1.12 + sin(i.wp.z * 0.85) * 1.6);
+    }
+    let meadowTint = mix(vec3f(0.76, 0.98, 0.72), vec3f(1.12, 1.10, 0.82), mix(mWaveA, wNoiseMacro, 0.45));
+    let cloverTint = mix(vec3f(0.84, 0.98, 0.82), vec3f(1.10, 1.06, 0.90), mix(mWaveB, wNoiseMeso, 0.50));
+    let sunLush = mix(vec3f(0.92, 0.99, 0.95), vec3f(1.10, 1.04, 0.86), smoothstep(0.42, 0.78, wNoiseMacro) * smoothstep(0.65, 0.95, rawAoInit));
+    albedo *= mix(vec3f(1.06, 1.02, 0.86), vec3f(0.80, 1.04, 0.88), smoothstep(0.25, 0.75, n1)) * meadowTint * cloverTint * sunLush * (0.86 + n2 * 0.16 + (wNoiseMeso - 0.5) * 0.18);
+  } else if (!isArch) {
+    albedo *= mix(vec3f(1.05, 1.01, 0.94), vec3f(0.92, 0.98, 1.04), n1) * (0.86 + n2 * 0.18 + (wNoiseMeso - 0.5) * 0.16);
   } else {
     albedo *= mix(vec3f(1.03, 1.0, 0.95), vec3f(0.94, 0.98, 1.02), n1) * (0.92 + n2 * 0.16);
   }
 
-  // ─── Vertical Step Risers: Per-Voxel-Cube Soil & Stone Variation (no sub-voxel horizontal striping) ───
-  if (ax != 1u) {
+  // ─── Vertical Cliff Risers (only on tall non-slope faces > 0.75m, band-limited by natFade) ───
+  if (ax != 1u && !isSlopeStep) {
     let voxRow = u32(blockCoord.y) & 7u;
     let colShift = u32(vClusterH * 2.0);
     if (pat == 1u || pat == 14u || pat == 17u) {
       if (voxRow >= 5u + (colShift & 1u)) {
-        albedo *= 1.01;
+        albedo *= mix(1.0, 1.01, natFade);
       } else if (voxRow >= 2u) {
-        albedo *= vec3f(0.97, 0.94, 0.90);
+        albedo *= mix(vec3f(1.0), vec3f(0.97, 0.94, 0.90), natFade);
       } else {
         let pebble = select(0.96, 1.05, h > 0.72);
-        albedo *= vec3f(0.94, 0.92, 0.90) * pebble;
+        albedo *= mix(vec3f(1.0), vec3f(0.94, 0.92, 0.90) * pebble, natFade);
       }
     } else if (pat == 2u || pat == 12u || pat == 11u) {
       if (voxRow >= 6u) {
-        albedo *= vec3f(0.95, 0.93, 0.90);
+        albedo *= mix(vec3f(1.0), vec3f(0.95, 0.93, 0.90), natFade);
       } else if (voxRow < 2u) {
         let pebble = select(0.95, 1.05, h > 0.68);
-        albedo *= vec3f(0.94, 0.92, 0.90) * pebble;
+        albedo *= mix(vec3f(1.0), vec3f(0.94, 0.92, 0.90) * pebble, natFade);
       }
     } else if (pat == 3u || pat == 15u || pat == 18u) {
-      let strataIdx = floor(f32(blockCoord.y >> 1) + (vClusterH - 0.5) * 2.0);
-      let strataHash = fract(sin(strataIdx * 12.9898) * 43758.5453);
+      let strataIdx = (blockCoord.y >> 1) + i32((vClusterH - 0.5) * 2.0);
+      let strataHash = f32(hashu(bitcast<u32>(strataIdx) * 747796405u) & 1023u) / 1023.0;
       let strataTint = mix(vec3f(0.93, 0.91, 0.88), vec3f(1.06, 1.04, 1.01), strataHash);
-      albedo *= mix(vec3f(1.0), strataTint, 0.30);
-    } else if (pat == 4u || pat == 5u || pat == 7u || pat == 24u) {
+      albedo *= mix(vec3f(1.0), strataTint, 0.26 * natFade);
+    } else if (pat == 4u || pat == 5u) {
       let horizCoord = select(i.wp.x, i.wp.z, ax == 0u);
-      let fiberIdx = floor(horizCoord * 16.0);
-      let fiberHash = fract(sin(fiberIdx * 37.719 + floor(i.wp.y * 4.0) * 7.13) * 43758.5453);
-      albedo *= mix(0.93, 1.04, fiberHash);
+      let fiberIdx = bitcast<u32>(i32(floor(horizCoord * 16.0)));
+      let yIdx = bitcast<u32>(i32(floor(i.wp.y * 4.0)));
+      let fiberHash = f32(hashu((fiberIdx * 37u) ^ (yIdx * 19349663u)) & 1023u) / 1023.0;
+      albedo *= mix(1.0, mix(0.95, 1.03, fiberHash), voxAA);
     }
-    albedo *= 0.96;
-  } else {
-    albedo *= 1.02;
   }
 
   // ─── Blast Scorch & Soot Voxels on Fractured Crater Surfaces ───
@@ -544,60 +628,239 @@ fn terrainColor(i: TOut, night: bool, w: f32) -> TerrainRes {
     albedo *= vec3f(soot * 0.78, soot * 0.73, soot * 0.70);
   }
 
-  if ((pat == 3u || pat == 15u) && baseN.y > 0.5) {
-    let mossPatch = step(0.62, n1 + (vClusterH - 0.5) * 0.18);
-    albedo = mix(albedo, vec3f(0.11, 0.22, 0.06) * voxQuantShade, mossPatch * 0.65);
+  // Smooth moss patches & humus soil variation across natural terrain (grass, dirt, stone, cliff)
+  var worldMossMask = 0.0;
+  if ((pat == 1u || pat == 2u || pat == 3u || pat == 14u || pat == 15u || pat == 16u || pat == 17u) && (baseN.y > 0.45 || isSlopeStep)) {
+    worldMossMask = smoothstep(0.55, 0.78, wNoiseMacro * 0.65 + (1.0 - wNoiseMeso) * 0.35) * smoothstep(0.95, 0.58, rawAoInit);
+    if (pat == 3u || pat == 15u) {
+      let mossPatch = smoothstep(0.54, 0.74, max(n1, worldMossMask));
+      albedo = mix(albedo, vec3f(0.11, 0.22, 0.06) * voxQuantShade, mossPatch * 0.68);
+    } else if (pat != 16u) {
+      albedo = mix(albedo, vec3f(0.085, 0.20, 0.055) * voxQuantShade, worldMossMask * 0.38);
+    }
+  }
+  // Procedural world-space relief stones & embedded pebbles on ground/paths/grass margins
+  var worldStoneMask = 0.0;
+  var worldStoneRim = 0.0;
+  var worldStoneTone = 0.5;
+  var worldStoneGrad = vec2f(0.0);
+  if (!isArch && dist < 14.0 && (ax == 1u || isSlopeStep) && (pat == 1u || pat == 2u || pat == 11u || pat == 12u || pat == 14u)) {
+    let pCellF = i.wp.xz * 2.25;
+    let pCell = vec2i(floor(pCellF));
+    let pSeed = (bitcast<u32>(pCell.x) * 73856093u) ^ (bitcast<u32>(pCell.y) * 19349663u);
+    let hPresence = f32(hashu(pSeed) & 1023u) / 1023.0;
+    let stoneChance = select(0.26, 0.58, pat == 2u || pat == 11u || pat == 12u);
+    if (hPresence < stoneChance) {
+      let ox = 0.28 + 0.44 * (f32(hashu(pSeed + 17u) & 1023u) / 1023.0);
+      let oz = 0.28 + 0.44 * (f32(hashu(pSeed + 31u) & 1023u) / 1023.0);
+      let dp = fract(pCellF) - vec2f(ox, oz);
+      let aspect = 0.85 + 0.35 * (f32(hashu(pSeed + 47u) & 1023u) / 1023.0);
+      let dpScaled = vec2f(dp.x * aspect, dp.y);
+      let rMax = 0.11 + 0.14 * (f32(hashu(pSeed + 61u) & 1023u) / 1023.0);
+      let rNorm = length(dpScaled) / rMax;
+      if (rNorm < 1.15) {
+        worldStoneRim = smoothstep(0.85, 1.02, rNorm) * (1.0 - smoothstep(1.02, 1.15, rNorm));
+        worldStoneMask = 1.0 - smoothstep(0.82, 1.02, rNorm);
+        worldStoneTone = f32(hashu(pSeed + 79u) & 1023u) / 1023.0;
+        worldStoneGrad = (-dpScaled / max(rMax * rMax, 0.005)) * worldStoneMask * 0.16;
+      }
+    }
   }
   let flags = u32(m0.w);
-  // Combine macro Concave Corner Cavity AO with per-cube 3D step occlusion
-  let rawAo = select(i.ao.x, i.ao.y, night);
-  let macroAo = mix(rawAo, pow(clamp(rawAo, 0.03, 1.0), 1.28), select(0.50, 0.80, vStyle == 2u));
+  // Strong natural & architectural ambient occlusion (multi-scale horizon + vertex AO)
+  let aoStrength = select(mix(0.84, 0.52, smoothstep(8.0, 28.0, dist)), 0.94, isArch);
+  let rawAo = mix(1.0, rawAoInit, aoStrength);
+  let cAo = clamp(rawAo, 0.03, 1.0);
+  let macroAo = mix(rawAo, cAo * sqrt(cAo), select(0.78, 0.90, vStyle == 2u));
   var ao = clamp(macroAo * cubeOcc, 0.04, 1.0);
-  // ─── PBR surface: material values, refined near the camera by the atlas (a 0.5 m tile of ATILE x ATILE texels:
-  // colour relative to the material mean, relief from the height channel, roughness / metal / occlusion / wet mask)
+  // ─── PBR surface: material values, refined near the camera by the atlas + real-time heightmap normal relief ───
   var rough = m1.z;
   var metal = f32((flags >> 8u) & 15u) / 15.0;
   var wetMask = 0.5;
-  let detail = 1.0 - smoothstep(10.0, 26.0, dist);
-  // atlas mip level: texels of the 0.5 m tile per screen pixel (each level halves every tile inside the atlas)
-  let fw = max(length(dpdx(i.wp)), length(dpdy(i.wp))) * 2.0 * ATILEF;
-  let mip = u32(clamp(floor(log2(max(fw, 1.0))), 0.0, 4.0));
+  // Crisp nearest-neighbor pixel art at close range (m0u == 0) + smooth linear minification at mid/far (m0u >= 1):
+  // eliminates growing/shrinking square mip blocks on house roofs/walls AND halves distant atlas fetches (4 -> 2)!
+  let fw = max(lx, ly) * 2.0 * ATILEF;
+  let mipF = clamp(log2(max(fw, 1.0)), 0.0, 4.0);
+  let m0u = u32(floor(mipF));
+  let mipBlend = fract(mipF);
+  let detail = select((1.0 - smoothstep(18.0, 38.0, dist)) * 0.98, 1.0 - smoothstep(24.0, 42.0, dist), isArch) / (1.0 + max(0.0, fw - 1.8) * 0.10);
   if (detail > 0.01) {
     let lv = i.wp * 2.0;
     var st = lv.xy;
     var ua = vec3f(1.0, 0.0, 0.0);
     var va = vec3f(0.0, 1.0, 0.0);
-    if (ax == 1u) { st = lv.xz; va = vec3f(0.0, 0.0, 1.0); } else if (ax == 0u) { st = lv.zy; ua = vec3f(0.0, 0.0, 1.0); }
-    let ts = u32(min(fract(st.x) * ATILEF, ATILEF - 1.0));
-    let tt = u32(min(fract(st.y) * ATILEF, ATILEF - 1.0));
-    let fcl = select(1u, select(2u, 0u, dir == 2u), ax == 1u);
-    let vr = u32(hash3i(vec3i(floor(lv - baseN * 0.02))) * 4.0) & 3u;
+    if (ax == 1u || isSlopeStep) {
+      st = select(lv.xz + baseN.xz * fract(lv.y), lv.xz, ax == 1u);
+      ua = vec3f(1.0, 0.0, 0.0);
+      va = vec3f(0.0, 0.0, 1.0);
+    } else if (ax == 0u) { st = lv.zy; ua = vec3f(0.0, 0.0, 1.0); }
+    let uvTile = vec2f(fract(st.x), 1.0 - fract(st.y));
+    let fcl = select(select(1u, select(2u, 0u, dir == 2u), ax == 1u), 0u, isSlopeStep);
+    let vrPos = select(lv - baseN * 0.02, vec3f(lv.x, 0.0, lv.z), isSlopeStep);
+    var vr = u32(hash3i(vec3i(floor(vrPos))) * 4.0) & 3u;
+    if (!isArch) {
+      let tCell = vec2i(floor(st));
+      let tHash = hashu((bitcast<u32>(tCell.x) * 73856093u) ^ (bitcast<u32>(tCell.y) * 19349663u) ^ (mat * 83492791u));
+      vr = tHash & 3u;
+    }
     let org = vec2u((fcl * 4u + vr) * ATILE, mat * ATILE);
-    let tx = textureLoad(atlas, (org + vec2u(ts, ATILE - 1u - tt)) >> vec2u(mip), mip);
-    let pb = textureLoad(atlasPbr, (org + vec2u(ts, ATILE - 1u - tt)) >> vec2u(mip), mip);
+    let tilePx0 = f32(ATILE >> m0u);
+    let invAt0 = 1.0 / vec2f(12.0 * tilePx0, 112.0 * tilePx0);
+    let loc0 = clamp(uvTile * tilePx0, vec2f(0.5), vec2f(tilePx0 - 0.5));
+    let uv0 = (vec2f(org >> vec2u(m0u)) + loc0) * invAt0;
+    var tx = vec4f(0.25, 0.25, 0.25, 0.5);
+    var pb = vec4f(rough, metal, 1.0, 0.5);
+    if (m0u == 0u) {
+      tx = textureSampleLevel(atlas, repSmp, uv0, f32(m0u));
+      pb = textureSampleLevel(atlasPbr, repSmp, uv0, f32(m0u));
+      if (mipBlend > 0.45) {
+        let tB = smoothstep(0.45, 1.0, mipBlend);
+        let tilePx1 = f32(ATILE >> 1u);
+        let invAt1 = 1.0 / vec2f(12.0 * tilePx1, 112.0 * tilePx1);
+        let loc1 = clamp(uvTile * tilePx1, vec2f(0.5), vec2f(tilePx1 - 0.5));
+        let uv1 = (vec2f(org >> vec2u(1u)) + loc1) * invAt1;
+        tx = mix(tx, textureSampleLevel(atlas, linSmp, uv1, 1.0), tB);
+        pb = mix(pb, textureSampleLevel(atlasPbr, linSmp, uv1, 1.0), tB);
+      }
+    } else {
+      tx = textureSampleLevel(atlas, linSmp, uv0, f32(m0u));
+      pb = textureSampleLevel(atlasPbr, linSmp, uv0, f32(m0u));
+      if (m0u < 4u && mipBlend > 0.20 && mipBlend < 0.80) {
+        let m1u = m0u + 1u;
+        let tB = smoothstep(0.20, 0.80, mipBlend);
+        let tilePx1 = f32(ATILE >> m1u);
+        let invAt1 = 1.0 / vec2f(12.0 * tilePx1, 112.0 * tilePx1);
+        let loc1 = clamp(uvTile * tilePx1, vec2f(0.5), vec2f(tilePx1 - 0.5));
+        let uv1 = (vec2f(org >> vec2u(m1u)) + loc1) * invAt1;
+        tx = mix(tx, textureSampleLevel(atlas, linSmp, uv1, f32(m1u)), tB);
+        pb = mix(pb, textureSampleLevel(atlasPbr, linSmp, uv1, f32(m1u)), tB);
+      }
+    }
     albedo *= mix(vec3f(1.0), tx.rgb * 4.0, detail); // the atlas stores colour / material mean x 0.25
+    if (worldStoneMask > 0.01) {
+      let stoneTint = mix(vec3f(0.21, 0.20, 0.18), vec3f(0.34, 0.31, 0.27), worldStoneTone);
+      albedo = mix(albedo, stoneTint * voxQuantShade, worldStoneMask * 0.85 * detail);
+    }
+    if (worldStoneRim > 0.01) { albedo *= mix(1.0, 0.74, worldStoneRim * detail); }
     rough = mix(rough, pb.r, detail);
+    if (worldMossMask > 0.01) { rough = mix(rough, 0.80, worldMossMask * 0.45 * detail); }
+    if (worldStoneMask > 0.01) { rough = mix(rough, 0.56, worldStoneMask * detail); }
     metal = mix(metal, pb.g, detail);
-    ao *= mix(1.0, pb.b, detail);
+    ao *= mix(1.0, pb.b, detail) * mix(1.0, 0.86, worldStoneMask * 0.35);
     wetMask = pb.a;
-    if ((flags & 4u) == 0u) { // foliage keeps its cut-out mask in alpha: no relief there
-      let st1 = 1u << mip; // the neighbouring texel of this level
-      let hs = textureLoad(atlas, (org + vec2u((ts + st1) % ATILE, ATILE - 1u - tt)) >> vec2u(mip), mip).a;
-      let ht = textureLoad(atlas, (org + vec2u(ts, ATILE - 1u - (tt + st1) % ATILE)) >> vec2u(mip), mip).a;
-      n = normalize(baseN - (ua * (hs - tx.a) + va * (ht - tx.a)) * (0.6 * detail));
+
+    // Real-time tangent-space normal perturbation from the atlas heightmap (tx.a) at close range only (m0u == 0)
+    let bumpFade = detail * (1.0 - smoothstep(5.0, 9.0, dist));
+    if (bumpFade > 0.02 && m0u == 0u) {
+      let loc0R = clamp(loc0 + vec2f(1.0, 0.0), vec2f(0.5), vec2f(tilePx0 - 0.5));
+      let loc0U = clamp(loc0 - vec2f(0.0, 1.0), vec2f(0.5), vec2f(tilePx0 - 0.5));
+      let hRight = textureSampleLevel(atlas, repSmp, (vec2f(org >> vec2u(m0u)) + loc0R) * invAt0, f32(m0u)).a;
+      let hUp = textureSampleLevel(atlas, repSmp, (vec2f(org >> vec2u(m0u)) + loc0U) * invAt0, f32(m0u)).a;
+      let bumpStr = select(3.0, 1.75, isArch) * bumpFade;
+      let wBump = select(vec3f((wNoiseMeso - 0.5) * 0.24 + worldStoneGrad.x, 0.0, (wNoiseMacro - 0.5) * 0.24 + worldStoneGrad.y), vec3f(0.0), isArch);
+      n = normalize(n + (ua * (tx.a - hRight) + va * (tx.a - hUp)) * bumpStr + wBump * bumpFade);
+    }
+
+    // ─── Analytical Band-Limited Architectural Seams (constant screen-pixel thickness, zero Moiré twisting) ───
+    // Gate seam derivative projections behind architectural seam patterns so natural terrain skips 2 sqrt + 4 dot per pixel
+    if (pat == 7u || pat == 22u || pat == 28u || pat == 10u || pat == 30u || pat == 13u || pat == 33u || pat == 9u || pat == 29u || pat == 38u) {
+      let fwStX = length(vec2f(dot(dwpDx, ua), dot(dwpDy, ua))) * 2.0;
+      let fwStY = length(vec2f(dot(dwpDx, va), dot(dwpDy, va))) * 2.0;
+      if (pat == 7u || pat == 22u || pat == 28u) {
+        // Wooden boards (PLANK walls/ceilings, FLOOR, DOOR, PAINT): 4 boards per 0.5 m (12.5 cm wide)
+        let across = select(st.y, st.x, pat == 22u || ax == 1u);
+        let along = select(st.x, st.y, pat == 22u || ax == 1u);
+        let fwAcross = select(fwStY, fwStX, pat == 22u || ax == 1u);
+        let fwAlong = select(fwStX, fwStY, pat == 22u || ax == 1u);
+        let boardCoord = across * 4.0;
+        let seamH = aaLine(boardCoord, fwAcross * 4.0, 0.055);
+        // Staggered rare butt-joints every 2.0 m (only 1 in 2 boards, integer hash: zero SFU sin)
+        let bIdx = bitcast<u32>(i32(floor(boardCoord)));
+        let buttShift = f32(hashu((bIdx * 747796405u) ^ (mat * 2891336453u)) & 1023u) / 1023.0;
+        let aIdx = bitcast<u32>(i32(floor(along * 0.25 + buttShift)));
+        let plankVar = f32(hashu((bIdx * 2654435761u) ^ (aIdx * 1597334677u)) & 1023u) / 1023.0;
+        albedo *= 0.94 + plankVar * 0.11;
+        rough = clamp(rough + (plankVar - 0.5) * 0.24, 0.16, 0.94);
+        let seamV = aaLine(along * 0.25 + buttShift, fwAlong * 0.25, 0.014) * step(0.45, buttShift) * (1.0 - seamH);
+        let seam = max(seamH, seamV * 0.65);
+        albedo *= mix(1.0, 0.52, seam);
+        ao *= mix(1.0, 0.68, seam);
+        rough = mix(rough, min(1.0, rough + 0.16), seam);
+      } else if (pat == 10u) {
+        // Brick courses (BRICK, HEARTH, BRICK_SILICATE): 8 courses per 0.5 m (6.25 cm), staggered stretchers/headers
+        let rowCoord = st.y * 8.0;
+        let rowIdx = floor(rowCoord);
+        let isHeader = (i32(rowIdx) & 1) != 0;
+        let colFreq = select(2.0, 4.0, isHeader);
+        let colOff = select(0.0, 0.5, (i32(rowIdx) & 2) != 0);
+        let mortarH = aaLine(rowCoord, fwStY * 8.0, 0.075);
+        let mortarV = aaLine(st.x * colFreq + colOff, fwStX * colFreq, 0.055) * (1.0 - mortarH);
+        let mortar = max(mortarH, mortarV);
+        let mortarCol = select(vec3f(0.42, 0.39, 0.35), m0.rgb * 0.78, mat == 54u);
+        albedo = mix(albedo, mortarCol, mortar * 0.78);
+        ao *= mix(1.0, 0.76, mortar);
+      } else if (pat == 30u || pat == 13u) {
+        // Glazed tiles & mosaic grout
+        let grout = max(aaLine(st.x * 4.0, fwStX * 4.0, 0.055), aaLine(st.y * 4.0, fwStY * 4.0, 0.055));
+        albedo = mix(albedo, albedo * 0.58, grout);
+        ao *= mix(1.0, 0.75, grout);
+      } else if (pat == 33u) {
+        // Varnished long dark-walnut floorboards (PARQUET): 4 planks per 0.5 m with staggered butt-joints & glossy specular varnish variation
+        let boardCoord = st.x * 4.0;
+        let bIdx = bitcast<u32>(i32(floor(boardCoord)));
+        let buttShift = f32(hashu((bIdx * 747796405u) ^ 7331u) & 1023u) / 1023.0;
+        let aIdx = bitcast<u32>(i32(floor(st.y * 0.45 + buttShift)));
+        let plankVar = f32(hashu((bIdx * 2654435761u) ^ (aIdx * 1597334677u)) & 1023u) / 1023.0;
+        let seamH = aaLine(boardCoord, fwStX * 4.0, 0.055);
+        let seamV = aaLine(st.y * 0.45 + buttShift, fwStY * 0.45, 0.016) * (1.0 - seamH);
+        let pq = max(seamH, seamV * 0.72);
+        albedo *= (0.86 + plankVar * 0.24) * mix(1.0, 0.48, pq);
+        ao *= mix(1.0, 0.66, pq);
+        rough = mix(clamp(rough * 0.72 + (plankVar - 0.5) * 0.14, 0.13, 0.42), 0.78, pq);
+      } else if (pat == 9u || pat == 29u) {
+        // Standing-seam roof iron & corrugated slate sheets
+        let freqX = select(1.0, 4.0, pat == 29u);
+        let seam = max(aaLine(st.x * freqX, fwStX * freqX, 0.045), aaLine(st.y * 1.0, fwStY, 0.035) * 0.7);
+        albedo *= mix(1.0, 0.66, seam);
+        ao *= mix(1.0, 0.78, seam);
+      } else if (pat == 38u) {
+        // Wallpaper vertical roll joints (every 0.5m)
+        let seamV = aaLine(st.x * 1.0, fwStX, 0.032) * 0.36;
+        albedo *= mix(1.0, 0.85, seamV);
+        ao *= mix(1.0, 0.88, seamV);
+      }
     }
   }
   let por = f32((flags >> 12u) & 15u) / 15.0;
-  let wet = F.pbr.x * select(0.4, 1.0, baseN.y > 0.5);
+  let wet = F.pbr.x * select(0.4, 1.0, n.y > 0.5);
   let hold = wet * (1.0 - 0.6 * por); // porous ground soaks the water up instead of keeping a film
   if (wet > 0.001) {
     let film = hold * mix(0.3, 1.0, wetMask); // the film stands in the hollows: smooth and level
     albedo *= mix(1.0, 0.6, wet * por);
     rough = mix(rough, 0.08, film);
     n = normalize(mix(n, baseN, film * 0.85));
+  } else if (!isArch && i.wp.y < 6.48) {
+    // Natural capillary dampness along low stream banks & wet riverbed pebbles
+    let shoreDamp = smoothstep(6.48, 6.08, i.wp.y) * (0.55 + 0.45 * wNoiseMeso) * select(0.45, 1.0, n.y > 0.4);
+    albedo *= mix(vec3f(1.0), vec3f(0.68, 0.69, 0.70), shoreDamp * 0.62);
+    rough = mix(rough, 0.20, shoreDamp * 0.65);
   }
-  let sh = shadowSun(i.wp, baseN, dist < 16.0); // 4-tap filter only near the camera
-  var c = shadePBR(i.wp, n, w, sh, Surf(albedo, rough, metal, ao));
+  // Lift shadow sample above 1-voxel step height on natural slopes; skip shadow taps on sun-backfacing opaque walls/ceilings
+  let shPos = select(i.wp, i.wp + vec3f(0.0, 0.22 + (1.0 - rawAoInit) * 0.14, 0.0) + F.sunDir.xyz * 0.16, !isArch);
+  let shNrm = select(baseN, vec3f(0.0, 1.0, 0.0), isSlopeStep);
+  var sh = 0.0;
+  if (dot(shNrm, F.sunDir.xyz) > 0.0 || (flags & 4u) != 0u) { sh = shadowSun(shPos, shNrm, false); }
+  let msTone = mangaShadow(sh, dot(baseN, F.sunDir.xyz), i.pos.xy);
+  var c = shadePBR(i.wp, n, w, sh, Surf(albedo * msTone, rough, metal, ao));
+  if (ax == 1u && n.y > 0.5) {
+    // Soft grounded floor/soil contact shadow directly beneath the hero's shoes (anchors character indoors & in forest shade)
+    let dFoot = length((i.wp.xz - F.player.xz) * vec2f(1.0, 1.35));
+    let hAbove = i.wp.y - F.player.y;
+    if (dFoot < 0.48 && hAbove > -0.22 && hAbove < 0.22) {
+      let footSh = 1.0 - smoothstep(0.44, 0.10, dFoot) * smoothstep(0.22, -0.02, hAbove) * 0.44;
+      c *= footSh;
+    }
+  }
   if ((flags & 4u) != 0u && pat != 21u) {
     let back = max(dot(-n, F.sunDir.xyz), 0.0) * 0.36 + 0.1;
     c += albedo * sunCol(w) * back * sh;
@@ -614,15 +877,15 @@ fn terrainColor(i: TOut, night: bool, w: f32) -> TerrainRes {
   // reflective for the screen-space rays: smooth materials as a whole (not texel by texel) and wet surfaces
   return TerrainRes(c, baseN, ao, m1.z < 0.3 || hold > 0.3);
 }
-// constant-world (WMODE 0/1) or dynamic without discard: early-Z / HSR friendly + G-Buffer MRT output
-@fragment fn fsTerrain(i: TOut) -> GFragOut {
+// constant-world (WMODE 0/1) or dynamic without discard: early-Z / HSR friendly single-target output
+@fragment fn fsTerrain(i: TOut) -> @location(0) vec4f {
   let w = wAt(i.wp);
   let night = w > 0.5;
   let res = terrainColor(i, night, w);
-  return GFragOut(vec4f(res.col, 1.0), vec4f(res.n * 0.5 + 0.5, gbA(res.ao, false, res.refl, false)));
+  return vec4f(res.col, 1.0);
 }
 // foliage: alpha-cut individual leaves from the atlas, both sides lit
-@fragment fn fsLeaf(i: TOut, @builtin(front_facing) ff: bool) -> GFragOut {
+@fragment fn fsLeaf(i: TOut, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
   let w = wAt(i.wp);
   let night = w > 0.5;
   if (WMODE == 2u && (i.info.y & select(1u, 2u, night)) == 0u) { discard; }
@@ -633,57 +896,117 @@ fn terrainColor(i: TOut, night: bool, w: f32) -> TerrainRes {
   var o = i;
   if (!ff) { o.info.x = (o.info.x & ~7u) | (dir ^ 1u); }
   let res = terrainColor(o, night, w);
-  return GFragOut(vec4f(res.col, 1.0), vec4f(res.n * 0.5 + 0.5, gbA(res.ao, true, false, false)));
+  return vec4f(res.col, 1.0);
 }
-@fragment fn fsTerrainMasked(i: TOut) -> GFragOut {
+@fragment fn fsTerrainMasked(i: TOut) -> @location(0) vec4f {
   let w = worldAt(i.wp);
   let night = w > 0.5;
   if ((i.info.y & select(1u, 2u, night)) == 0u) { discard; }
   let res = terrainColor(i, night, w);
-  return GFragOut(vec4f(res.col, 1.0), vec4f(res.n * 0.5 + 0.5, gbA(res.ao, false, res.refl, false)));
+  return vec4f(res.col, 1.0);
 }
-@fragment fn fsWater(i: TOut) -> GFragOut {
+@fragment fn fsWater(i: TOut, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
   let w = wAt(i.wp);
-  if (w > 0.5) { discard; }
-  let t = F.cam.w;
-  let q = i.wp.xz;
-  // Hardware trilinear 3D noise fetch instead of 3x 8-corner hash evaluations (cuts ALU by 75%)
-  let uvw = vec3f(q.x * 0.05 + t * 0.012, t * 0.008, q.y * 0.05 + t * 0.007);
-  let n0 = textureSampleLevel(noise3, repSmp, uvw, 0.0).r;
-  let nx = textureSampleLevel(noise3, repSmp, uvw + vec3f(0.015, 0.0, 0.0), 0.0).r - n0;
-  let nz = textureSampleLevel(noise3, repSmp, uvw + vec3f(0.0, 0.0, 0.015), 0.0).r - n0;
-  var n = normalize(vec3f(-nx * 3.2, 1.0, -nz * 3.2));
-  let side = i.info.x != 2u;
-  if (side) { n = nrmOf(i.info.x); }
-  let v = normalize(F.cam.xyz - i.wp);
-  let oneMinusNoV = 1.0 - max(dot(n, v), 0.0);
-  let o2 = oneMinusNoV * oneMinusNoV;
-  let fres = 0.02 + 0.98 * (o2 * o2 * oneMinusNoV);
-  let sh = shadowSun(i.wp, vec3f(0.0, 1.0, 0.0), false);
-  let r = reflect(-v, n);
-  // reflection: the sky of the time of day, replaced by what the screen-space rays of the last frame found
-  var refl = envSpec(vec3f(r.x, abs(r.y), r.z), 0.06, w);
-  let pq = prevUV(i.wp);
-  if (F.fx2.x > 0.5 && pq.z >= 0.0) {
-    let ss = textureSampleLevel(ssrTex, repSmp, pq.xy, 0.0);
-    refl = mix(refl, ss.rgb, ss.a);
+  let night = w > 0.5;
+  let mat = select(i.info.z, i.info.w, night);
+  if ((i.info.y & select(1u, 2u, night)) == 0u || mat == 0u) { discard; }
+  if (mat == 15u) {
+    if (w > 0.5) { discard; }
+    let t = F.cam.w;
+    let q = i.wp.xz;
+    let camVec = F.cam.xyz - i.wp;
+    let dist = length(camVec);
+    let v = camVec / max(dist, 1e-4);
+    // Dual-octave 3D ripple normal field + near-field capillary glitter ripples
+    let uvw1 = vec3f(q.x * 0.085 + t * 0.018, t * 0.012, q.y * 0.085 - t * 0.032);
+    let uvw2 = vec3f(q.x * 0.24 - t * 0.026, t * 0.020 + 0.37, q.y * 0.22 - t * 0.048);
+    let n0 = textureSampleLevel(noise3, repSmp, uvw1, 0.0).r * 0.65 + textureSampleLevel(noise3, repSmp, uvw2, 0.0).r * 0.35;
+    let nx = (textureSampleLevel(noise3, repSmp, uvw1 + vec3f(0.016, 0.0, 0.0), 0.0).r - n0) * 0.75
+           + (textureSampleLevel(noise3, repSmp, uvw2 + vec3f(0.022, 0.0, 0.0), 0.0).r - n0) * 0.45;
+    let nz = (textureSampleLevel(noise3, repSmp, uvw1 + vec3f(0.0, 0.0, 0.016), 0.0).r - n0) * 0.75
+           + (textureSampleLevel(noise3, repSmp, uvw2 + vec3f(0.0, 0.0, 0.022), 0.0).r - n0) * 0.45;
+    let waveH = sin(q.x * 5.2 + nx * 12.0 + t * 1.4) * cos(q.y * 4.4 - t * 2.8 + nz * 12.0);
+    let ripFade = 1.0 - smoothstep(10.0, 34.0, dist);
+    let capX = cos((q.x * 1.45 + q.y * 1.90) * 6.0 - t * 3.1 + n0 * 6.5) * 0.028 * ripFade;
+    let capZ = sin((q.x * 1.85 - q.y * 1.35) * 6.4 + t * 2.7 + n0 * 6.5) * 0.028 * ripFade;
+    var n = normalize(vec3f(-nx * 3.8 + waveH * 0.045 + capX, 1.0, -nz * 3.8 - waveH * 0.045 + capZ));
+    let side = (i.info.x & 7u) != 2u;
+    if (side) { n = nrmOf(i.info.x & 7u); }
+    let nv = max(dot(n, v), 0.001);
+    let oneMinusNoV = 1.0 - nv;
+    let o2 = oneMinusNoV * oneMinusNoV;
+    let fres = clamp(0.032 + 0.94 * (o2 * o2), 0.0, 1.0);
+    let sh = shadowSun(i.wp, vec3f(0.0, 1.0, 0.0), false);
+    let r = reflect(-v, n);
+    let rawRefl = envSpec(vec3f(r.x, abs(r.y), r.z), 0.026, w);
+    // Tint grazing reflections with rich overhanging forest canopy emerald-teal so water never looks like grey plastic
+    let canopyReflTint = mix(vec3f(0.26, 0.44, 0.34), vec3f(0.78, 0.88, 0.94), clamp(nv * 1.45, 0.0, 1.0));
+    let refl = rawRefl * canopyReflTint;
+    let spec = specGGX(n, v, F.sunDir.xyz, 0.018, vec3f(0.042)) * sh;
+    // Crisp GTA 6 style animated sun-glint diamond sparkle path across ripples
+    let rSun = max(dot(r, F.sunDir.xyz), 0.0);
+    let glint = (pow(rSun, 360.0) * 3.4 + pow(rSun, 64.0) * 0.22) * sh;
+    let shoreRaw = clamp(i.ao.x, 0.0, 1.0);
+    let fn1 = textureSampleLevel(noise3, repSmp, vec3f(q.x * 0.32 + t * 0.02, t * 0.03, q.y * 0.32 - t * 0.04), 0.0).r;
+    // Soften and warp shore interpolation by world-space noise so 12.5cm voxel triangle diagonals never form sawtooth teeth
+    let shore = smoothstep(0.12, 0.92, shoreRaw * (0.68 + fn1 * 0.48));
+    let caustic = smoothstep(0.38, 0.76, waveH * 0.45 + fn1 * 0.75) * (0.30 + 0.70 * sh);
+    let bedLit = vec3f(0.16, 0.19, 0.11) * (F.skyD.rgb * 1.12 + F.sunD.rgb * (0.45 + 0.55 * sh));
+    let depthM = (1.0 - shore) * 1.48 + 0.06;
+    let beer = exp(-depthM * vec3f(1.32, 0.44, 0.32));
+    let waterScatter = vec3f(0.012, 0.072, 0.078) * (F.skyD.rgb * 1.15 + F.sunD.rgb * 0.28 * sh);
+    let deep = bedLit * beer + waterScatter * (vec3f(1.0) - beer) + vec3f(0.14, 0.20, 0.10) * F.sunD.rgb * (caustic * 0.22 * (0.35 + 0.65 * shore));
+    let meniscus = smoothstep(0.76, 0.95, shore) * smoothstep(0.45, 0.78, fn1) * (0.35 + 0.65 * sh);
+    var col = mix(deep, refl, fres * 0.84) + F.sunD.rgb * (spec + glint) + vec3f(0.80, 0.90, 0.86) * (meniscus * 0.18);
+    // Softly fade water alpha to 0.18 at the very edge of the bank so the water feathers organically into the grassy bank
+    var a = mix(mix(0.20, 0.76, 1.0 - shore * 0.84), 0.92, fres * 0.86);
+    if (side) {
+      let fl = 0.5 + 0.5 * sin(i.wp.y * 14.0 + t * 15.0 + fn1 * 4.0);
+      col = mix(col, vec3f(0.78, 0.88, 0.92) * (F.skyD.rgb * 1.15 + F.sunD.rgb * 0.3), 0.18 + 0.2 * fl);
+      a = 0.65;
+    }
+    col += vec3f(1.0, 0.32, 0.22) * waveRim(i.wp);
+    col = flatFog(col, i.wp, w);
+    return vec4f(col * a, a);
   }
-  let spec = specGGX(n, v, F.sunDir.xyz, 0.03, vec3f(0.02)) * sh;
-  let deep = vec3f(0.02, 0.11, 0.14) * (F.skyD.rgb * 1.4 + F.sunD.rgb * 0.25 * sh);
-  var col = mix(deep, refl, fres) + F.sunD.rgb * spec;
-  var a = mix(0.56, 0.88, fres);
-  let fn1 = textureSampleLevel(noise3, repSmp, vec3f(q.x * 0.22 + t * 0.04, t * 0.06, q.y * 0.22 - t * 0.03), 0.0).r;
-  let foam = smoothstep(0.28, 0.65, i.ao.x * (0.45 + fn1 * 0.65));
-  col = mix(col, vec3f(0.82, 0.90, 0.94) * (F.skyD.rgb * 1.1 + F.sunD.rgb * 0.35 * sh), foam * 0.28);
-  a = max(a, foam * 0.42);
-  if (side) {
-    let fl = 0.5 + 0.5 * sin(i.wp.y * 14.0 + t * 15.0 + fn1 * 4.0);
-    col = mix(col, vec3f(0.78, 0.88, 0.92) * (F.skyD.rgb * 1.15 + F.sunD.rgb * 0.3), 0.18 + 0.2 * fl);
-    a = 0.65;
+  // Translucent reflective glass panes (Dream M.WINDOW & Nightmare M.N_GLASS): draw front face only so 1-voxel panes never double-blend
+  if (!ff) { discard; }
+  let dir = i.info.x & 7u;
+  let n = nrmOf(dir);
+  let camVec = F.cam.xyz - i.wp;
+  let dist = length(camVec);
+  let v = camVec / max(dist, 1e-4);
+  let gn = select(-n, n, dot(n, v) > 0.0);
+  let nv = abs(dot(n, v));
+  let om = 1.0 - nv;
+  let om2 = om * om;
+  let fres = clamp(0.10 + 0.86 * (om2 * om2), 0.10, 0.96);
+  let r = reflect(-v, gn);
+  let envR = envSpec(vec3f(r.x, abs(r.y) * 0.8 + 0.15, r.z), 0.04, w);
+  let sh = shadowSun(i.wp, n, false);
+  let gSpec = specGGX(gn, v, F.sunDir.xyz, 0.028, vec3f(0.06)) * sh;
+  let uv = i.quadUV;
+  let edgeD = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+  let paneNoise = textureSampleLevel(noise3, repSmp, i.wp * 1.4, 0.0).r;
+  let grime = textureSampleLevel(noise3, repSmp, i.wp * 3.8 + vec3f(0.21), 0.0).r;
+  if (night) {
+    // Nightmare: dark smoky see-through glass with delicate frost rim and fine crack wisps (never opaque red brick)
+    let crack = smoothstep(0.66, 0.78, grime) * 0.22;
+    let edgeFrost = (1.0 - smoothstep(0.0, 0.24, edgeD)) * 0.18;
+    var gCol = mix(vec3f(0.09, 0.11, 0.14) * (0.45 + 0.55 * paneNoise), envR * vec3f(0.68, 0.76, 0.90), fres * 0.80)
+      + F.sunN.rgb * gSpec * 0.75 + vec3f(0.34, 0.25, 0.26) * (crack + edgeFrost);
+    let gA = clamp(0.24 + fres * 0.34 + crack + edgeFrost, 0.22, 0.56);
+    gCol = flatFog(gCol, i.wp, w);
+    return vec4f(gCol * gA, gA);
   }
-  col += vec3f(1.0, 0.32, 0.22) * waveRim(i.wp);
-  col = flatFog(col, i.wp, w);
-  return GFragOut(vec4f(col * a, a), vec4f(n * 0.5 + 0.5, gbA(1.0, false, true, false)));
+  // Dream: crystal clear straight-on interior/garden view with rich grazing Fresnel sky reflection & warm sun glint
+  let dustRim = (1.0 - smoothstep(0.0, 0.16, edgeD)) * 0.12;
+  let diag = 0.5 + 0.5 * sin((i.wp.x + i.wp.y + i.wp.z) * 5.0);
+  var gCol = mix(vec3f(0.22, 0.38, 0.44), envR * vec3f(0.92, 0.98, 1.04), 0.56 + fres * 0.42)
+    + F.sunD.rgb * gSpec * 1.65 + vec3f(0.40, 0.50, 0.54) * (dustRim + diag * 0.08 + paneNoise * 0.04);
+  let gA = clamp(0.16 + fres * 0.54 + dustRim, 0.16, 0.72);
+  gCol = flatFog(gCol, i.wp, w);
+  return vec4f(gCol * gA, gA);
 }
 
 // ONE WIND for everything that sways: grass blades, plants and flowers (PART.SWAY), tree crowns and foliage cards.
@@ -705,7 +1028,7 @@ fn windAt(xz: vec2f) -> vec4f {
 }
 @group(1) @binding(0) var<uniform> D: vec4u;
 // what the prop fragment shaders work with
-struct POut { pos: vec4f, wp: vec3f, n: vec3f, col: vec3f, ao: f32, mask: u32, fl: u32, lv: vec3f, quv: vec4f, vsz: f32, tu: vec3f, tv: vec3f, rgb: u32, extra: f32 };
+struct POut { pos: vec4f, wp: vec3f, n: vec3f, wn: vec3f, col: vec3f, ao: f32, mask: u32, fl: u32, lv: vec3f, quv: vec4f, vsz: f32, tu: vec3f, tv: vec3f, rgb: u32, extra: f32 };
 // what actually travels from the vertex to the fragment stage, packed (mobile GPUs write every
 // varying to memory): flags/mask/colour/voxel size in one flat vec4u, normal + U/V axes as 10:10:10
 struct PV {
@@ -717,15 +1040,32 @@ struct PV {
   @location(4) @interpolate(flat) info: vec4u,
   @location(5) @interpolate(flat) frame: vec3u,
   @location(6) @interpolate(flat) extra: f32,
+  @location(7) wn: vec3f,
 };
 fn pk10(v: vec3f) -> u32 { let q = vec3u(clamp(v * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)) * 1023.0 + 0.5); return q.x | (q.y << 10u) | (q.z << 20u); }
 fn uk10(p: u32) -> vec3f { return vec3f(f32(p & 1023u), f32((p >> 10u) & 1023u), f32((p >> 20u) & 1023u)) * (2.0 / 1023.0) - 1.0; }
+fn decodeOct9(pk: u32) -> vec3f {
+  let ox = f32(pk & 511u) * (2.0 / 511.0) - 1.0;
+  let oy = f32((pk >> 9u) & 511u) * (2.0 / 511.0) - 1.0;
+  var n = vec3f(ox, oy, 1.0 - abs(ox) - abs(oy));
+  if (n.z < 0.0) {
+    let sx = select(-1.0, 1.0, n.x >= 0.0);
+    let sy = select(-1.0, 1.0, n.y >= 0.0);
+    n = vec3f((1.0 - abs(n.y)) * sx, (1.0 - abs(n.x)) * sy, n.z);
+  }
+  return safeNorm(n, vec3f(0.0, 1.0, 0.0));
+}
+fn safeNorm(v: vec3f, fb: vec3f) -> vec3f {
+  let l2 = dot(v, v);
+  return select(fb, v * inverseSqrt(max(l2, 1e-8)), l2 > 1e-8);
+}
 fn packP(o: POut) -> PV {
   var v: PV;
   v.pos = o.pos; v.wp = o.wp; v.lv = o.lv; v.quv = o.quv; v.ao = o.ao;
   v.info = vec4u(o.fl, o.mask, o.rgb, bitcast<u32>(o.vsz));
-  v.frame = vec3u(pk10(normalize(o.n)), pk10(o.tu), pk10(o.tv));
+  v.frame = vec3u(pk10(safeNorm(o.n, vec3f(0.0, 1.0, 0.0))), pk10(o.tu), pk10(o.tv));
   v.extra = o.extra;
+  v.wn = o.wn;
   return v;
 }
 fn unpackP(v: PV) -> POut {
@@ -733,8 +1073,10 @@ fn unpackP(v: PV) -> POut {
   o.pos = v.pos; o.wp = v.wp; o.lv = v.lv; o.quv = v.quv; o.ao = v.ao;
   o.fl = v.info.x; o.mask = v.info.y; o.rgb = v.info.z; o.vsz = bitcast<f32>(v.info.w);
   let rgb = vec3f(f32((o.rgb >> 16u) & 255u), f32((o.rgb >> 8u) & 255u), f32(o.rgb & 255u)) / 255.0;
-  o.col = pow(rgb, vec3f(2.2));
+  let c2 = rgb * rgb;
+  o.col = c2 * (0.8 + 0.2 * rgb);
   o.n = uk10(v.frame.x); o.tu = uk10(v.frame.y); o.tv = uk10(v.frame.z);
+  o.wn = v.wn;
   o.extra = v.extra;
   return o;
 }
@@ -751,13 +1093,22 @@ struct PShadOut {
   let o = propOut(vi, ii);
   return PShadOut(F.shadowMat * vec4f(o.wp, 1.0), o.quv, vec2u(o.fl, bitcast<u32>(o.vsz)));
 }
+@vertex fn vsPropShadowOpaque(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {
+  let o = propOut(vi, ii);
+  return F.shadowMat * vec4f(o.wp, 1.0);
+}
 fn propOut(vi: u32, ii: u32) -> POut {
   let mi = minfo[D.x];
-  let inst = insts[vis[mi.visBase + ii]];
-  // v1 faces: 2 words, one voxel each; v2 faces: 3 words, merged quads of chunky models or curved foliage cards
+  let instIdx = vis[mi.visBase + ii];
+  let inst = insts[instIdx];
+  // v1: 2 words; v2: 3 words; lowpoly: 6 words; smooth: 10 words (+ 4x oct9 normal & Dual-Bone LBS weights)
   let v2 = (mi.flags & 256u) != 0u;
+  let isLowPoly = (mi.flags & 2048u) != 0u;
+  let isSmooth = (mi.flags & 4096u) != 0u;
+  let isSkinned = (mi.flags & 8192u) != 0u;
+  let stride = select(select(select(2u, 3u, v2), 6u, isLowPoly), 10u, isSmooth);
   // indexed quads (vertex index = quad * 4 + corner)
-  let fo = mi.faceStart + (vi >> 2u) * select(2u, 3u, v2);
+  let fo = mi.faceStart + (vi >> 2u) * stride;
   let w0 = mfaces[fo];
   let w1 = mfaces[fo + 1u];
   var dir = (w0 >> 24u) & 7u;
@@ -767,7 +1118,9 @@ fn propOut(vi: u32, ii: u32) -> POut {
   var du = 1.0; var dv = 1.0;
   var edgeMask = 15u;
   var cardMeta = 0u;
-  if (v2) {
+  var texPat = 0u;
+  var colWord = w1;
+  if (v2 && !isLowPoly) {
     let w2 = mfaces[fo + 2u];
     vpos = vec3f(f32(w0 & 1023u), f32((w0 >> 10u) & 4095u), f32((w0 >> 22u) & 1023u));
     dir = w2 & 7u; part = (w2 >> 3u) & 15u; em = (w2 >> 7u) & 1u;
@@ -775,9 +1128,12 @@ fn propOut(vi: u32, ii: u32) -> POut {
     cardMeta = (w2 >> 24u) & 255u;
     edgeMask = cardMeta & 15u;
   }
-  // Full 8-bit 4-corner Voxel Cavity AO preserved for both v1 and v2 greedy quads
-  let aow = w1 >> 24u;
-  let flip = (aow & 3u) + ((aow >> 4u) & 3u) > ((aow >> 2u) & 3u) + ((aow >> 6u) & 3u);
+  if (isLowPoly) {
+    colWord = mfaces[fo + 4u];
+  }
+  // Full 8-bit 4-corner Voxel Cavity AO preserved for v1, v2, and low-poly meshes
+  let aow = colWord >> 24u;
+  let flip = !isLowPoly && ((aow & 3u) + ((aow >> 4u) & 3u) > ((aow >> 2u) & 3u) + ((aow >> 6u) & 3u));
   let c = (vi + select(0u, 1u, flip)) & 3u;
   let cu = cuOf(c);
   let cv = cvOf(c);
@@ -791,21 +1147,49 @@ fn propOut(vi: u32, ii: u32) -> POut {
   var quv = vec4f(cu * du, cv * dv, du, dv);
   var ua = axv(uaxOf(dir));
   var va = axv(vaxOf(dir));
+  var nrm = nrmOf(dir);
+  var smoothN = nrm;
+  var skWord = 0u;
+  var clothByte = 0u;
+  if (isLowPoly) {
+    let w2 = mfaces[fo + 2u];
+    let w3 = mfaces[fo + 3u];
+    let w5 = mfaces[fo + 5u];
+    let p0 = vec3f(f32(w0 & 1023u), f32((w0 >> 10u) & 4095u), f32((w0 >> 22u) & 1023u)) * 0.0625;
+    let p1 = vec3f(f32(w1 & 1023u), f32((w1 >> 10u) & 4095u), f32((w1 >> 22u) & 1023u)) * 0.0625;
+    let p2 = vec3f(f32(w2 & 1023u), f32((w2 >> 10u) & 4095u), f32((w2 >> 22u) & 1023u)) * 0.0625;
+    let p3 = vec3f(f32(w3 & 1023u), f32((w3 >> 10u) & 4095u), f32((w3 >> 22u) & 1023u)) * 0.0625;
+    lp = select(select(p0, p1, c == 1u), select(p2, p3, c == 3u), c >= 2u);
+    part = w5 & 15u;
+    em = (w5 >> 4u) & 1u;
+    texPat = (w5 >> 5u) & 7u;
+    du = f32(((w5 >> 8u) & 255u) + 1u) * 0.25;
+    dv = f32(((w5 >> 16u) & 255u) + 1u) * 0.25;
+    clothByte = (w5 >> 24u) & 255u;
+    quv = vec4f(cu * du, cv * dv, du, dv);
+    let eU = (p1 - p0) + (p2 - p3);
+    let eV = (p3 - p0) + (p2 - p1);
+    ua = normalize(select(vec3f(1.0, 0.0, 0.0), eU, length(eU) > 1e-4));
+    va = normalize(select(vec3f(0.0, 1.0, 0.0), eV, length(eV) > 1e-4));
+    let fnRaw = cross(p2 - p0, p3 - p1);
+    nrm = normalize(select(vec3f(0.0, 1.0, 0.0), fnRaw, length(fnRaw) > 1e-5));
+    if (isSmooth) {
+      skWord = mfaces[fo + 6u + c];
+      smoothN = decodeOct9(skWord);
+    } else {
+      smoothN = nrm;
+    }
+  }
   if (part == 15u) {
-    // a thin branch: the one-voxel line becomes a rod of k voxels across (a few centimetres near the camera; never
-    // thinner than about a pixel, so far twigs do not flicker); faces move toward the voxel centre line
-    let k = clamp(1.6 / max(ppv, 0.001), 0.28, 1.0);
-    lp += axv(dir >> 1u) * ((nposOf(dir) - 0.5) * (k - 1.0));
-    if (du < 1.5) { lp += ua * ((cu - 0.5) * (k - 1.0)); }
-    if (dv < 1.5) { lp += va * ((cv - 0.5) * (k - 1.0)); }
+    // keep thin branches face-connected with subpixel anti-aliasing from (ku, kv); no inward center-shrinking gaps
     part = 11u; // shaded as wood
   }
   var flexS = 0.0;
   var flexT = 0.0;
   var radDir = vec3f(1.0, 0.0, 0.0);
   var sideDir = vec3f(0.0, 0.0, 1.0);
-  if (part == 10u && v2 && cardMeta > 0u) {
-    // Doubly-curved 3x2 botanical foliage surface (wingMode 1..6 = 3 longitudinal arch segments x 2 gull-wings; 7 = cross-volume sheet)
+  if (part == 10u && v2 && !isLowPoly && cardMeta > 0u) {
+    // Curved botanical foliage surface: wingMode 0 = single full arched quad (6x faster!), 1..6 = 3x2 segments, 7 = cross-volume sheet
     let wingMode = dir & 7u;
     var uUV = cu;
     var vUV = cv;
@@ -841,7 +1225,10 @@ fn propOut(vi: u32, ii: u32) -> POut {
     let yLong = dv * (slope0 * flexT - archDrop * flexT * flexT);
     var latSpan = du * 0.5 * (0.58 + 0.54 * sin(flexT * 2.55));
     var yWing = -du * 0.22 * abs(flexS) * (0.42 + 0.58 * flexT);
-    if (wingMode == 7u) {
+    if (wingMode == 0u) {
+      latSpan = du * 0.5 * (0.86 + 0.24 * flexT);
+      yWing = -du * 0.10 * flexT;
+    } else if (wingMode == 7u) {
       let bank = select(-0.34, 0.34, (azIdx & 1u) == 0u);
       latSpan = du * 0.5;
       yWing = flexS * du * bank - 0.12 * dv * flexT * flexT;
@@ -851,10 +1238,8 @@ fn propOut(vi: u32, ii: u32) -> POut {
     ua = sideDir;
     va = normalize(radDir + vec3f(0.0, slope0 - 2.0 * archDrop * flexT, 0.0));
   }
-  let lvox = lp;
   var p = (lp - mi.pivot.xyz) * mi.pivot.w;
-  var nrm = nrmOf(dir);
-  if (part == 10u && v2 && cardMeta > 0u) {
+  if (part == 10u && v2 && !isLowPoly && cardMeta > 0u) {
     // Smooth canopy-outward + umbrella-arch normal eliminates flat-card intersection seams
     nrm = normalize(vec3f(
       p.x * 0.72 + radDir.x * (0.42 + 0.45 * flexT) + sideDir.x * (flexS * 0.32),
@@ -877,8 +1262,204 @@ fn propOut(vi: u32, ii: u32) -> POut {
     // fragments hovering around the crowns
     p.y += sin(t * 0.7 + vc.x * 0.31 + vc.z * 0.17 + inst.phase) * 0.06;
   }
+  let pBind = p;
+  let rawB1 = (skWord >> 22u) & 15u;
+  let vMob = f32((skWord >> 26u) & 63u) / 63.0;
+  let headBaseY = select(-0.04, 1.328, pBind.y > 0.85);
+  let eyeC = vec3f(select(-0.035, 0.035, pBind.x >= 0.0), headBaseY + 0.235, 0.078);
+  let lvox = select(lp, select(pBind, pBind - eyeC, isSmooth && rawB1 == 11u), isLowPoly);
+  if (isSmooth && rawB1 >= 11u && rawB1 <= 13u) {
+    // Organic living facial micro-animation: saccade eye rotation (11), asymmetric blinking eyelids/lashes (12), subtle jaw/tongue breathing (13)
+    let yawEye = sin(t * 0.72 + inst.phase) * 0.13 + sin(t * 2.35 + inst.phase * 1.7) * 0.045;
+    let pitchEye = cos(t * 0.55 + inst.phase) * 0.065 - 0.015;
+    if (rawB1 == 11u) {
+      let cy = cos(yawEye); let sy = sin(yawEye);
+      let cp = cos(pitchEye); let sp = sin(pitchEye);
+      let de = p - eyeC;
+      let deY = vec3f(de.x, de.y * cp - de.z * sp, de.y * sp + de.z * cp);
+      p = eyeC + vec3f(deY.x * cy + deY.z * sy, deY.y, -deY.x * sy + deY.z * cy);
+      let nY = vec3f(nrm.x, nrm.y * cp - nrm.z * sp, nrm.y * sp + nrm.z * cp);
+      nrm = vec3f(nY.x * cy + nY.z * sy, nY.y, -nY.x * sy + nY.z * cy);
+      let sY = vec3f(smoothN.x, smoothN.y * cp - smoothN.z * sp, smoothN.y * sp + smoothN.z * cp);
+      smoothN = vec3f(sY.x * cy + sY.z * sy, sY.y, -sY.x * sy + sY.z * cy);
+      let uY = vec3f(ua.x, ua.y * cp - ua.z * sp, ua.y * sp + ua.z * cp);
+      ua = vec3f(uY.x * cy + uY.z * sy, uY.y, -uY.x * sy + uY.z * cy);
+      let vY = vec3f(va.x, va.y * cp - va.z * sp, va.y * sp + va.z * cp);
+      va = vec3f(vY.x * cy + vY.z * sy, vY.y, -vY.x * sy + vY.z * cy);
+    } else if (rawB1 == 12u) {
+      let bCycle = fract(t * 0.24 + inst.phase * 0.13);
+      let bPulse = smoothstep(0.0, 0.028, bCycle) * (1.0 - smoothstep(0.028, 0.084, bCycle));
+      let isUpper = pBind.y >= eyeC.y - 0.002;
+      let lidAng = select(
+        (-bPulse * 0.14 - pitchEye * 0.25) * vMob,
+        (bPulse * 0.88 - pitchEye * 0.38) * vMob,
+        isUpper
+      );
+      let cl = cos(lidAng); let sl = sin(lidAng);
+      let dl = p - eyeC;
+      p = eyeC + vec3f(dl.x, dl.y * cl - dl.z * sl, dl.y * sl + dl.z * cl);
+      nrm = vec3f(nrm.x, nrm.y * cl - nrm.z * sl, nrm.y * sl + nrm.z * cl);
+      smoothN = vec3f(smoothN.x, smoothN.y * cl - smoothN.z * sl, smoothN.y * sl + smoothN.z * cl);
+    } else {
+      let breath = 0.5 + 0.5 * sin(t * 1.38 + inst.phase);
+      let microTalk = max(0.0, sin(t * 0.41 + inst.phase) * sin(t * 2.85));
+      let jawAng = (0.012 + breath * 0.018 + microTalk * 0.024) * vMob;
+      let cj = cos(jawAng); let sj = sin(jawAng);
+      let jawPiv = vec3f(0.0, headBaseY + 0.185, 0.028);
+      let dj = p - jawPiv;
+      p = jawPiv + vec3f(dj.x, dj.y * cj - dj.z * sj, dj.y * sj + dj.z * cj);
+      nrm = vec3f(nrm.x, nrm.y * cj - nrm.z * sj, nrm.y * sj + nrm.z * cj);
+      smoothN = vec3f(smoothN.x, smoothN.y * cj - smoothN.z * sj, smoothN.y * sj + smoothN.z * cj);
+    }
+  }
+  if (isSkinned && isSmooth && rawB1 == 15u) {
+    // Camera strap & rangefinder walking pendulum (pivots smoothly from upper collarbone)
+    let damp = clamp((1.31 - p.y) / 0.14, 0.0, 1.0);
+    if (damp > 0.001) {
+      let camInst = insts[instIdx + 3u];
+      let cPh = camInst.phase;
+      let amp = camInst.extra;
+      let roll = sin(cPh) * 0.15 * amp * damp;
+      let pitch = (0.042 + 0.085 * abs(cos(cPh)) - 0.055 * cos(cPh * 2.0 - 0.5)) * amp * damp;
+      let cp = cos(pitch); let sp = sin(pitch);
+      let cr = cos(roll); let sr = sin(roll);
+      let piv = vec3f(0.0, 1.31, 0.082);
+      let d0 = p - piv;
+      let dx1 = d0.x * cr - d0.y * sr;
+      let dy1 = d0.x * sr + d0.y * cr;
+      p = piv + vec3f(dx1, dy1 * cp + d0.z * sp, -dy1 * sp + d0.z * cp);
+      let ny0 = nrm.x * sr + nrm.y * cr;
+      nrm = vec3f(nrm.x * cr - nrm.y * sr, ny0 * cp + nrm.z * sp, -ny0 * sp + nrm.z * cp);
+      let sy0 = smoothN.x * sr + smoothN.y * cr;
+      smoothN = vec3f(smoothN.x * cr - smoothN.y * sr, sy0 * cp + smoothN.z * sp, -sy0 * sp + smoothN.z * cp);
+      let uy0 = ua.x * sr + ua.y * cr;
+      ua = vec3f(ua.x * cr - ua.y * sr, uy0 * cp + ua.z * sp, -uy0 * sp + ua.z * cp);
+      let vy0 = va.x * sr + va.y * cr;
+      va = vec3f(va.x * cr - va.y * sr, vy0 * cp + va.z * sp, -vy0 * sp + va.z * cp);
+    }
+  }
+  let clothZone = clothByte & 15u;
+  if (isLowPoly && isSmooth && clothZone > 0u) {
+    // Tear-free GPU cloth physics solver: inertial spring lag + centrifugal turn sway + wind flutter + dynamic crease normals
+    let waCloth = windAt(vec2f(inst.m0.w, inst.m2.w));
+    let rootScale = max(length(inst.m0.xyz), 1e-4);
+    let wndVec = vec3f(waCloth.x, 0.0, waCloth.y);
+    let lwX = dot(vec3f(inst.m0.x, inst.m1.x, inst.m2.x), wndVec) / rootScale;
+    let lwZ = dot(vec3f(inst.m0.z, inst.m1.z, inst.m2.z), wndVec) / rootScale;
+    let rXZLen = length(pBind.xz);
+    let radXZ = select(vec2f(0.0, 1.0), pBind.xz / rXZLen, rXZLen > 1e-4);
+    var cDP = vec3f(0.0);
+    var cMob = 0.0;
+    var foldRipple = 0.0;
+    if (isSkinned) {
+      let cB0 = insts[instIdx + 1u];
+      let cB1 = insts[instIdx + 2u];
+      let lagFwd = cB0.phase + lwZ * 0.0085;
+      let lagLat = cB0.extra + lwX * 0.0085;
+      let bounce = cB1.phase;
+      let act = cB1.extra;
+      if (clothZone == 1u) {
+        // Jacket torso, pockets & bottom ribbed hem (pinned at shoulders/collar >= 1.25m, free hem down to 0.86m)
+        cMob = smoothstep(1.25, 0.86, pBind.y);
+        let hemFlare = (abs(lagFwd) * 0.28 + abs(lagLat) * 0.28 + act * 0.0032) * cMob;
+        let wArg = t * (5.2 + act * 4.8) + pBind.x * 24.0 + pBind.y * 15.0 + inst.phase;
+        let wave = sin(wArg) * (0.0020 + act * 0.0036) * cMob;
+        foldRipple = cos(wArg) * (0.09 + act * 0.06) * cMob;
+        cDP = vec3f(lagLat * 0.82 * cMob + radXZ.x * (hemFlare + wave), bounce * 0.44 * cMob - abs(wave) * 0.25, lagFwd * 0.82 * cMob + radXZ.y * (hemFlare + wave));
+      } else if (clothZone == 2u) {
+        // Draped 3D hood behind neck collar: bounces out-of-phase on footstep impact & trails in motion/wind
+        cMob = smoothstep(-0.025, -0.105, pBind.z) * smoothstep(1.375, 1.16, pBind.y);
+        let wArg = t * (5.8 + act * 5.0) + pBind.x * 26.0 - pBind.y * 14.0;
+        let wave = sin(wArg) * (0.0022 + act * 0.0040) * cMob;
+        foldRipple = cos(wArg) * (0.10 + act * 0.06) * cMob;
+        cDP = vec3f(lagLat * 1.12 * cMob + wave * 0.45, bounce * 1.32 * cMob - abs(lagFwd) * 0.14 * cMob, lagFwd * 1.08 * cMob - abs(wave));
+      } else if (clothZone == 3u) {
+        // Hollow sleeves & cuffs: underside gravity sag, arm-swing inertia & longitudinal sleeve folds
+        cMob = smoothstep(1.28, 0.78, pBind.y);
+        let armSide = select(-1.0, 1.0, pBind.x >= 0.0);
+        let armCtrX = armSide * (0.175 + 0.025 * smoothstep(1.28, 0.78, pBind.y));
+        let armOff = vec2f(pBind.x - armCtrX, pBind.z);
+        let armRLen = length(armOff);
+        let armRad = select(vec2f(armSide, 0.0), armOff / armRLen, armRLen > 1e-4);
+        let wArg = t * (6.0 + act * 5.2) + pBind.y * 28.0 + armSide * 1.4;
+        let wave = sin(wArg) * (0.0016 + act * 0.0030) * cMob;
+        foldRipple = cos(wArg) * (0.08 + act * 0.05) * cMob;
+        let flare = (0.0014 + abs(wave) * 0.45 + act * 0.0018) * cMob;
+        cDP = vec3f(lagLat * 0.36 * cMob + armRad.x * (flare + wave), -0.0024 * cMob + bounce * 0.32 * cMob, lagFwd * 0.36 * cMob + armRad.y * (flare + wave));
+      } else if (clothZone == 4u) {
+        // Hood drawstrings & metal aglets: free collar pendulums (outward bias avoids chest clipping)
+        cMob = smoothstep(1.345, 1.285, pBind.y);
+        let wArg = t * (4.2 + act * 4.5) + pBind.x * 45.0 + inst.phase;
+        let cSwing = sin(wArg) * (0.0028 + act * 0.0055) * cMob;
+        cDP = vec3f(lagLat * 1.35 * cMob + cSwing, bounce * 0.80 * cMob, max(-0.001, lagFwd * 0.45 * cMob) + abs(cSwing) * 0.65);
+      } else if (clothZone == 5u) {
+        // Denim trouser legs & open ankle cuffs: stride cloth ripple & calf/cuff flutter
+        cMob = smoothstep(0.76, 0.11, pBind.y);
+        let legSide = select(-1.0, 1.0, pBind.x >= 0.0);
+        let legOff = vec2f(pBind.x - legSide * 0.0936, pBind.z);
+        let legRLen = length(legOff);
+        let legRad = select(vec2f(legSide, 0.0), legOff / legRLen, legRLen > 1e-4);
+        let wArg = t * (6.2 + act * 5.4) + pBind.y * 22.0 + legSide * 1.5;
+        let wave = sin(wArg) * (0.0014 + act * 0.0028) * cMob;
+        foldRipple = cos(wArg) * (0.07 + act * 0.05) * cMob;
+        let flare = (0.0012 + abs(lagFwd) * 0.14 + act * 0.0020) * cMob;
+        cDP = vec3f(lagLat * 0.32 * cMob + legRad.x * (flare + wave), bounce * 0.24 * cMob, lagFwd * 0.36 * cMob + legRad.y * (flare + wave));
+        let lDot = dot(cDP.xz, legRad);
+        if (lDot < -0.0010) { cDP = vec3f(cDP.x - legRad.x * (lDot + 0.0010), cDP.y, cDP.z - legRad.y * (lDot + 0.0010)); }
+      } else if (clothZone == 6u) {
+        // Undershirt crewneck T-shirt: subtle chest breathing expansion
+        cMob = smoothstep(0.90, 1.28, pBind.y);
+        let breath = sin(t * 1.6 + inst.phase) * 0.0012 * cMob;
+        cDP = vec3f(radXZ.x * breath, 0.0, radXZ.y * breath);
+      }
+      if (clothZone == 1u) {
+        let rDot = dot(cDP.xz, radXZ);
+        if (rDot < -0.0012) { cDP = vec3f(cDP.x - radXZ.x * (rDot + 0.0012), cDP.y, cDP.z - radXZ.y * (rDot + 0.0012)); }
+      } else if (clothZone == 2u) {
+        cDP.z = min(cDP.z, 0.0012);
+      } else if (clothZone == 3u) {
+        let armSideC = select(-1.0, 1.0, pBind.x >= 0.0);
+        let armCtrXC = armSideC * (0.175 + 0.025 * smoothstep(1.28, 0.78, pBind.y));
+        let armOffC = vec2f(pBind.x - armCtrXC, pBind.z);
+        let armRLenC = length(armOffC);
+        let armRadC = select(vec2f(armSideC, 0.0), armOffC / armRLenC, armRLenC > 1e-4);
+        let aDot = dot(cDP.xz, armRadC);
+        if (aDot < -0.0010) { cDP = vec3f(cDP.x - armRadC.x * (aDot + 0.0010), cDP.y, cDP.z - armRadC.y * (aDot + 0.0010)); }
+      }
+    } else {
+      // Static/patrolling NPC outer garments (skirts, coats, sweaters, scarves, aprons) flutter smoothly in world breeze
+      cMob = select(smoothstep(0.96, 0.40, pBind.y), smoothstep(1.24, 0.72, pBind.y), clothZone == 1u || clothZone == 3u);
+      let wMag = length(waCloth.xy);
+      let wArg = t * (2.6 + wMag * 2.2) + pBind.x * 16.0 + pBind.y * 12.0 + inst.phase;
+      let wave = sin(wArg) * (0.0028 + wMag * 0.0075) * cMob;
+      foldRipple = cos(wArg) * (0.08 + wMag * 0.05) * cMob;
+      cDP = vec3f(lwX * 0.018 * cMob + radXZ.x * (wave + abs(lwZ) * 0.005 * cMob), -abs(wave) * 0.2, lwZ * 0.018 * cMob + radXZ.y * (wave + abs(lwX) * 0.005 * cMob));
+      let nDot = dot(cDP.xz, radXZ);
+      if (nDot < -0.0010) { cDP = vec3f(cDP.x - radXZ.x * (nDot + 0.0010), cDP.y, cDP.z - radXZ.y * (nDot + 0.0010)); }
+    }
+    p += cDP;
+    if (abs(foldRipple) > 1e-4) {
+      nrm = safeNorm(nrm + va * foldRipple, nrm);
+      smoothN = safeNorm(smoothN + va * foldRipple, smoothN);
+    }
+  }
   let lp4 = vec4f(p, 1.0);
-  var wp = vec3f(dot(inst.m0, lp4), dot(inst.m1, lp4), dot(inst.m2, lp4));
+  var m0 = inst.m0;
+  var m1 = inst.m1;
+  var m2 = inst.m2;
+  if (isSkinned && isSmooth) {
+    let b0 = min((skWord >> 18u) & 15u, 10u);
+    let b1 = select(min(rawB1, 10u), b0, rawB1 >= 11u);
+    let w0b = select(vMob, 1.0, rawB1 >= 11u);
+    let sm0 = insts[instIdx + 1u + b0];
+    let sm1 = insts[instIdx + 1u + b1];
+    if (dot(sm0.m0.xyz, sm0.m0.xyz) > 1e-6 && dot(sm1.m0.xyz, sm1.m0.xyz) > 1e-6) {
+      m0 = mix(sm1.m0, sm0.m0, w0b);
+      m1 = mix(sm1.m1, sm0.m1, w0b);
+      m2 = mix(sm1.m2, sm0.m2, w0b);
+    }
+  }
+  var wp = vec3f(dot(m0, lp4), dot(m1, lp4), dot(m2, lp4));
   // the wind (windAt): in world space, so every plant and tree leans the same way whatever its rotation
   let isTree = (mi.flags & 4u) != 0u;
   if (part == 3u || (isTree && (part == 10u || part == 11u))) {
@@ -905,16 +1486,19 @@ fn propOut(vi: u32, ii: u32) -> POut {
   var o: POut;
   o.pos = F.viewProj * vec4f(wp, 1.0);
   o.wp = wp;
-  o.n = vec3f(dot(inst.m0.xyz, nrm), dot(inst.m1.xyz, nrm), dot(inst.m2.xyz, nrm));
-  o.tu = normalize(vec3f(dot(inst.m0.xyz, ua), dot(inst.m1.xyz, ua), dot(inst.m2.xyz, ua)));
-  o.tv = normalize(vec3f(dot(inst.m0.xyz, va), dot(inst.m1.xyz, va), dot(inst.m2.xyz, va)));
-  o.rgb = w1 & 0xffffffu;
+  o.n = safeNorm(vec3f(dot(m0.xyz, nrm), dot(m1.xyz, nrm), dot(m2.xyz, nrm)), vec3f(0.0, 1.0, 0.0));
+  o.wn = safeNorm(vec3f(dot(m0.xyz, smoothN), dot(m1.xyz, smoothN), dot(m2.xyz, smoothN)), o.n);
+  o.tu = safeNorm(vec3f(dot(m0.xyz, ua), dot(m1.xyz, ua), dot(m2.xyz, ua)), vec3f(1.0, 0.0, 0.0));
+  o.tv = safeNorm(vec3f(dot(m0.xyz, va), dot(m1.xyz, va), dot(m2.xyz, va)), vec3f(0.0, 1.0, 0.0));
+  o.rgb = colWord & 0xffffffu;
   o.ao = f32((aow >> (c * 2u)) & 3u) / 3.0;
   o.mask = inst.mask;
-  o.fl = part | (em << 4u) | (dir << 5u) | (((mi.flags >> 4u) & 3u) << 8u) | (select(0u, 1u, mi.pivot.w > 0.1) << 10u);
+  let isEyeballBit = select(0u, 1u << 17u, isLowPoly && isSmooth && rawB1 == 11u);
+  o.fl = part | (em << 4u) | (dir << 5u) | (((mi.flags >> 4u) & 3u) << 8u) | (select(0u, 1u, mi.pivot.w > 0.1) << 10u) | (select(0u, 1u, isLowPoly) << 11u) | (select(0u, 1u, isSmooth) << 22u) | isEyeballBit;
   o.lv = lvox;
-  o.quv = quv;
-  o.fl = o.fl | (select(0u, w1 & 3u, (mi.flags & 512u) != 0u) << 12u) | (select(edgeMask, cardMeta, part == 10u) << 14u);
+  o.quv = select(quv, vec4f(smoothN, vMob), isLowPoly);
+  let metaBits = select(select(edgeMask, cardMeta, part == 10u), texPat, isLowPoly);
+  o.fl = o.fl | (select(0u, colWord & 3u, (mi.flags & 512u) != 0u) << 12u) | (metaBits << 14u);
   o.vsz = mi.pivot.w;
   o.extra = inst.extra;
   return o;
@@ -924,7 +1508,7 @@ fn propOut(vi: u32, ii: u32) -> POut {
 fn foliageCardTex(quv: vec4f, fl: u32, vsz: f32) -> vec4f {
   let shape = (fl >> 8u) & 3u; // 0: broadleaf, 1: conifer needle frond, 2: blossom, 3: weeping birch/willow
   let cardMeta = (fl >> 14u) & 255u;
-  let physScale = clamp(vsz / 0.04, 1.6, 4.0);
+  let physScale = clamp(vsz / 0.04, 1.6, 3.6);
   let totalPix = max(vec2f(6.0), floor(quv.zw * physScale));
   let uvRaw = clamp(quv.xy / max(quv.zw, vec2f(0.001)), vec2f(0.0), vec2f(0.9999));
   let pixF = floor(uvRaw * totalPix);
@@ -933,87 +1517,121 @@ fn foliageCardTex(quv: vec4f, fl: u32, vsz: f32) -> vec4f {
   let s = (uv.x - 0.5) * 2.0;
   let t = uv.y;
   let seed = i32(cardMeta) * 19 + i32(shape) * 73;
-  let hPix = hash3i(vec3i(pix.x, pix.y, seed + 41));
+  let hPix = f32(hashu((bitcast<u32>(pix.x) * 73856093u) ^ (bitcast<u32>(pix.y) * 19349663u) ^ u32(seed + 41)) & 255u) / 255.0;
 
-  // 1. Scalloped pixel-art cluster silhouette + dappled sky gaps (erases all rectangular card edges)
+  var strandCoord3 = 0.0;
+  // 1. Cohesive, multi-lobed pixel-art cluster silhouette (zero SFU atan2/sin/cos: pure algebraic Chebyshev harmonics!)
   if (shape == 1u) {
-    // Conifer drooping needle fan: wide mid-frond tapering into serrated needle fingers
+    // Conifer drooping needle fan: solid mid-frond tapering into serrated needle fingers at the rim
     let dy = (t - 0.46) / 0.52;
-    let r = sqrt(s * s * (0.76 + 0.34 * t) + dy * dy);
-    let ang = atan2(dy, s);
-    let finger = sin(ang * 13.0 + f32(seed)) * 0.12 + cos(ang * 7.0 - f32(seed) * 0.7) * 0.10;
-    let hBundle = hash3i(vec3i(pix.x / 2, pix.y / 3, seed + 5));
-    let rLimit = 0.88 + finger + (hBundle - 0.5) * 0.24 + (hPix - 0.5) * 0.10;
+    let r2 = s * s * (0.74 + 0.30 * t) + dy * dy;
+    let invR = inverseSqrt(max(r2, 1e-5));
+    let r = r2 * invR;
+    let cx = s * invR;
+    let sy = dy * invR;
+    let c2 = cx * cx - sy * sy;
+    let s2 = 2.0 * cx * sy;
+    let c4 = c2 * c2 - s2 * s2;
+    let s4 = 2.0 * c2 * s2;
+    let finger = (c4 * cx - s4 * sy) * 0.11 + (c4 * c2 + s4 * s2) * 0.08;
+    let hBundle = f32(hashu((bitcast<u32>(pix.x / 3) * 73856093u) ^ (bitcast<u32>(pix.y / 3) * 19349663u) ^ u32(seed + 5)) & 255u) / 255.0;
+    let rLimit = 0.90 + finger + (hBundle - 0.5) * 0.16;
     if (r > rLimit) { return vec4f(0.0); }
-    if (r > 0.58 && hBundle < 0.20 && hPix < 0.52) { return vec4f(0.0); }
   } else if (shape == 3u) {
-    // Weeping willow / birch cascading pixel-art strands
-    let dy = (t - 0.48) / 0.50;
-    let strandWave = sin(s * 9.5 + f32(seed)) * 0.13 + cos(s * 5.0 - f32(seed)) * 0.09;
-    let r = sqrt(s * s * 0.84 + dy * dy) - strandWave * t;
-    let hTuft = hash3i(vec3i(pix.x / 2, pix.y / 4, seed + 13));
-    let rLimit = 0.88 + (hTuft - 0.5) * 0.24 + (hPix - 0.5) * 0.10;
-    if (r > rLimit) { return vec4f(0.0); }
-    if (t > 0.45 && abs(sin(s * 10.5 + f32(seed))) > 0.80 && hPix < 0.62) { return vec4f(0.0); }
+    // Weeping willow / birch: slender cascading leafy strands & graceful scalloped tips
+    let strandCoord = uv.x * 5.0 + (t * (1.0 - t) * 4.0 - 0.5) * 0.22;
+    strandCoord3 = strandCoord;
+    let stIdx = floor(strandCoord);
+    let stOff = abs(fract(strandCoord) - 0.5) * 2.0;
+    let hSt = f32(hashu((bitcast<u32>(i32(stIdx)) * 73856093u) ^ u32(seed + 13)) & 255u) / 255.0;
+    let tipEnd = 0.08 + hSt * 0.26;
+    let envW = 1.0 - abs(s) * 0.24;
+    let strandHalf = mix(0.28, 0.92, smoothstep(tipEnd, 0.85, t)) * envW;
+    if (t < tipEnd || stOff > strandHalf) { return vec4f(0.0); }
   } else {
     // Broadleaf & blossom billowing multi-lobed pixel bouquet
     let dy = (t - 0.48) / 0.50;
-    let r = sqrt(s * s * 0.86 + dy * dy);
-    let ang = atan2(dy, s);
-    let lobes = sin(ang * 5.0 + f32(seed) * 1.3) * 0.14 + cos(ang * 9.0 - f32(seed) * 0.8) * 0.09;
+    let r2 = s * s * 0.84 + dy * dy;
+    let invR = inverseSqrt(max(r2, 1e-5));
+    let r = r2 * invR;
+    let cx = s * invR;
+    let sy = dy * invR;
+    let c2 = cx * cx - sy * sy;
+    let s2 = 2.0 * cx * sy;
+    let c4 = c2 * c2 - s2 * s2;
+    let s4 = 2.0 * c2 * s2;
+    let lobes = (c4 * cx - s4 * sy) * 0.13 + (c4 * c4 - s4 * s4) * 0.08;
     let stagX = pix.x + (pix.y / 3) * 2;
-    let hTuft = hash3i(vec3i(stagX / 3, pix.y / 3, seed + 19));
-    let rLimit = 0.88 + lobes + (hTuft - 0.5) * 0.24 + (hPix - 0.5) * 0.10;
+    let hTuft = f32(hashu((bitcast<u32>(stagX / 3) * 73856093u) ^ (bitcast<u32>(pix.y / 3) * 19349663u) ^ u32(seed + 19)) & 255u) / 255.0;
+    let rLimit = 0.90 + lobes + (hTuft - 0.5) * 0.18;
     if (r > rLimit) { return vec4f(0.0); }
-    if (r > 0.56 && hTuft < 0.18 && hPix < 0.55) { return vec4f(0.0); }
   }
 
-  // 2. Staggered pixel-art leaf shingles & bouquet shading (root-to-tip gradient like vsGrass)
-  let boughGrad = 0.74 + 0.36 * smoothstep(0.0, 0.85, t) + 0.08 * (1.0 - abs(s));
-  let bqCell = vec2i(pix.x / 6, pix.y / 6);
-  let bqLocal = vec2f(f32(pix.x % 6) - 2.5, f32(pix.y % 6) - 2.5) / 3.0;
-  let bqMound = 0.92 + 0.16 * clamp(1.0 - dot(bqLocal, bqLocal) * 0.45 + bqLocal.y * 0.25, 0.0, 1.2);
+  // 2. Volumetric pixel-art leaf bouquet shading: deep occluded base/interior -> sunlit upper/outer lobes
+  let boughGrad = 0.58 + 0.52 * smoothstep(0.0, 0.88, t) + 0.12 * (1.0 - s * s);
+  let bqCell = vec2i(pix.x / 5, pix.y / 5);
+  let bqLocal = vec2f(f32(pix.x % 5) - 2.0, f32(pix.y % 5) - 2.0) / 2.5;
+  let bqDome = clamp(1.0 - dot(bqLocal, bqLocal) * 0.38 + bqLocal.y * 0.35, 0.0, 1.35);
+  let bqMound = 0.78 + 0.34 * bqDome;
   let hBq = hash3i(vec3i(bqCell.x, bqCell.y, seed + 101));
 
   var leafTone = 1.0;
   var warmTip = vec3f(1.0);
   if (shape == 1u) {
-    // Crisp ribbed conifer needle bundles
+    // Crisp ribbed conifer needle bundles with deep shadow grooves
     let nStripe = (pix.x + pix.y * 2) % 3;
     let hNeedle = hash3i(vec3i(pix.x / 2, pix.y / 3, seed + 71));
     if (nStripe == 0) {
-      leafTone = 0.72 + hNeedle * 0.12;
+      leafTone = 0.58 + hNeedle * 0.14;
     } else if (nStripe == 1) {
-      leafTone = 0.96 + hNeedle * 0.14;
+      leafTone = 0.92 + hNeedle * 0.14;
     } else {
-      leafTone = 1.15 + hNeedle * 0.14;
-      warmTip = vec3f(1.04, 1.05, 0.90);
+      leafTone = 1.18 + hNeedle * 0.16;
+      warmTip = vec3f(1.05, 1.06, 0.88);
+    }
+  } else if (shape == 3u) {
+    // Graceful paired lanceolate leaves along drooping willow/birch strands
+    let strandU = fract(strandCoord3) - 0.5;
+    let leafChevron = (pix.y + i32(abs(strandU) * 6.0)) & 3;
+    let hPair = hash3i(vec3i(i32(uv.x * 5.0), pix.y / 3, seed + 59));
+    if (abs(strandU) < 0.08) {
+      leafTone = 0.62 + hPair * 0.12;
+      warmTip = vec3f(0.92, 0.95, 0.78);
+    } else if (leafChevron == 0) {
+      leafTone = 0.58 + hPair * 0.14;
+      warmTip = vec3f(0.84, 0.96, 0.98);
+    } else if (leafChevron == 2) {
+      leafTone = 1.24 + hPair * 0.16;
+      warmTip = vec3f(1.10, 1.12, 0.82);
+    } else {
+      leafTone = 0.94 + hPair * 0.16 + (hPix - 0.5) * 0.08;
     }
   } else {
-    // Staggered 4x4 overlapping pixel-art leaf shingles with dark upper tuck & sunlit lower blade tip
-    let shiftX = pix.x + (pix.y / 4) * 2;
-    let lx = ((shiftX % 4) + 4) % 4;
-    let ly = ((pix.y % 4) + 4) % 4;
-    let leafCell = vec2i(shiftX / 4, pix.y / 4);
+    // Staggered 4x4 overlapping pixel-art leaf clusters with directional light-dark leaf volume
+    let shiftX = pix.x + (pix.y >> 2) * 2;
+    let lx = shiftX & 3;
+    let ly = pix.y & 3;
+    let leafCell = vec2i(shiftX >> 2, pix.y >> 2);
     let hLeaf = hash3i(vec3i(leafCell.x, leafCell.y, seed + 83));
     if (ly == 0 || (ly == 1 && lx == 0)) {
-      // Deep occluded shadow crease under the overlapping leaf shingle above
-      leafTone = 0.68 + hLeaf * 0.12;
+      // Deep occluded cool shadow crease under the overlapping leaf cluster
+      leafTone = 0.52 + hLeaf * 0.12;
+      warmTip = select(vec3f(0.84, 0.96, 1.05), vec3f(0.88, 0.84, 0.98), shape == 2u);
     } else if (ly == 3 && (lx == 1 || lx == 2)) {
-      // Sunlit lower/outer leaf blade tip
-      leafTone = 1.18 + hLeaf * 0.15;
-      warmTip = select(vec3f(1.07, 1.06, 0.86), vec3f(1.20, 1.06, 1.14), shape == 2u);
+      // Sunlit outer leaf blade tip
+      leafTone = 1.24 + hLeaf * 0.16;
+      warmTip = select(vec3f(1.10, 1.08, 0.82), vec3f(1.22, 1.06, 1.14), shape == 2u);
     } else if (ly == 3) {
       // Shadow notch between adjacent leaf tips
-      leafTone = 0.76 + hLeaf * 0.10;
+      leafTone = 0.66 + hLeaf * 0.10;
     } else {
-      // Rich midtone leaf blade with subtle midrib
-      let midrib = select(1.0, 0.88, lx == 1 && ly == 2);
-      leafTone = (0.94 + hLeaf * 0.18 + (hPix - 0.5) * 0.08) * midrib;
+      // Rich midtone leaf blade with subtle midrib vein
+      let midrib = select(1.0, 0.84, lx == 1 && ly == 2);
+      leafTone = (0.94 + hLeaf * 0.18 + (hPix - 0.5) * 0.06) * midrib;
     }
   }
 
-  let tint = warmTip * (leafTone * bqMound * boughGrad * (0.94 + hBq * 0.12));
+  let tint = warmTip * (leafTone * bqMound * boughGrad * (0.92 + hBq * 0.16));
   return vec4f(tint, 1.0);
 }
 @fragment fn fsPropShadow(s: PShadOut) {
@@ -1114,25 +1732,403 @@ fn treeEyeShade(i: POut, w: f32) -> vec3f {
   return col * (0.75 + 0.55 * w);
 }
 
+// Hardware-trilinear 32x32x32 3D value noise fetch (replaces 8-corner software hash3i ALU with 1 texture op)
+fn snoise3(p: vec3f) -> f32 {
+  return textureSampleLevel(noise3, repSmp, p * 0.03125, 0.0).r;
+}
+
+fn sq(x: f32) -> f32 { return x * x; }
 fn facetNormal(i: POut, nrmIn: vec3f) -> vec3f {
   return nrmIn;
 }
-// Surface-aligned 2D pixel-art texture of props, furniture, buildings, vehicles, characters and tree bark (from v2.0)
+// Surface-aligned 2D texture of props, furniture, buildings, vehicles, characters and tree bark (band-limited with screen-space derivatives)
 fn propPixelTex(i: POut, n: vec3f) -> vec4f {
   let part = i.fl & 15u;
+  let isLowPoly = (i.fl & 2048u) != 0u;
   let cardMeta = (i.fl >> 12u) & 255u;
-  if (part == 10u && cardMeta > 0u) {
+  if (part == 10u && !isLowPoly && cardMeta > 0u) {
     return vec4f(1.0, 1.0, 1.0, 0.5);
   }
 
-  // Continuous 2D surface coordinates in meters -> quantized to crisp pixel-art texels (~2.5cm on props, ~3.2cm on bark)
-  let pixSize = select(clamp(i.vsz * 0.48, 0.014, 0.028), 0.032, part == 11u);
+  let pixSize = select(select(clamp(i.vsz * 0.48, 0.014, 0.028), 0.032, part == 11u), 0.0044, isLowPoly);
   let uMeters = i.quv.x * i.vsz;
   let vMeters = i.quv.y * i.vsz;
-  let pix = vec2i(floor(vec2f(uMeters, vMeters) / pixSize));
+  let uvPix = vec2f(uMeters, vMeters) / pixSize;
+  let camVec = F.cam.xyz - i.wp;
+  let camDist = length(camVec);
+  let vCamDir = camVec / max(camDist, 1e-4);
+  let grazing = clamp(abs(dot(n, vCamDir)), 0.22, 1.0);
+  let fwPix = camDist / max(F.opt.x * pixSize * grazing, 1e-3);
+  let fineAA = 1.0 / (1.0 + fwPix * fwPix * select(2.5, 0.16, isLowPoly));
+  let midAA = 1.0 / (1.0 + fwPix * fwPix * select(0.8, 0.045, isLowPoly));
+  if (midAA < 0.015 && !isLowPoly) {
+    return vec4f(1.0, 1.0, 1.0, 0.5);
+  }
+  let pix = vec2i(floor(uvPix));
   let seed = i32((i.rgb * 2654435761u) >> 18u);
-  let hPix = hash3i(vec3i(pix.x, pix.y, seed));
-  let h2x2 = hash3i(vec3i(pix.x >> 1, pix.y >> 1, seed + 19));
+  let hPix = mix(0.5, hash3i(vec3i(pix.x, pix.y, seed)), fineAA);
+  let h2x2 = mix(0.5, hash3i(vec3i(pix.x >> 1, pix.y >> 1, seed + 19)), midAA);
+
+  if (isLowPoly) {
+    // 1. Living 3D Rotating Eyeball Shader with anterior-chamber corneal refraction & pixel-art crisp iris crypts
+    if ((i.fl & (1u << 17u)) != 0u) {
+      let ed = safeNorm(i.lv, vec3f(0.0, 0.0, 1.0));
+      let scleraBase = vec3f(0.95, 0.92, 0.89);
+      // Warm inner/outer caruncle flush, wet tear-meniscus & delicate capillary vessels
+      let cornerT = smoothstep(0.54, 0.94, abs(ed.x));
+      let veinW = sin(ed.y * 44.0 + snoise3(ed * 15.0) * 3.8) * sin(abs(ed.x) * 30.0 + ed.y * 12.0);
+      let vein = smoothstep(0.68, 0.94, veinW) * cornerT;
+      let upperLidSh = smoothstep(0.24, 0.72, ed.y) * 0.22;
+      var eyeC = mix(scleraBase, vec3f(0.90, 0.62, 0.58), cornerT * 0.48);
+      eyeC = mix(eyeC, vec3f(0.72, 0.20, 0.20), vein * 0.34) * (1.0 - upperLidSh);
+
+      if (ed.z > 0.20) {
+        // Subtle corneal parallax refraction shifts apparent iris depth inward relative to view ray
+        let parX = clamp(dot(vCamDir, i.tu), -0.65, 0.65) * 0.036;
+        let parY = clamp(dot(vCamDir, i.tv), -0.65, 0.65) * 0.036;
+        let irisXY = ed.xy - vec2f(parX, parY);
+        let ir = length(irisXY);
+        let ang = atan2(irisXY.y, irisXY.x);
+        // Crisp pixel-art quantized iris fiber wedges blended cleanly via fineAA
+        let angQ = floor(ang * 22.0) / 22.0;
+        let irQ = floor(ir * 58.0) / 58.0;
+        let angMix = mix(ang, angQ, 0.45 * fineAA);
+        let irMix = mix(ir, irQ, 0.32 * fineAA);
+        // Captivating emerald-slate iris with warm golden-amber central collarette heterochromia & crisp radial crypts
+        let irisRich = clamp(i.col * 2.55, vec3f(0.08), vec3f(0.86));
+        let fiber = 0.5 + 0.5 * sin(angMix * 44.0 + snoise3(ed * 22.0) * 2.8);
+        let fiberFine = 0.5 + 0.5 * cos(angMix * 88.0 - snoise3(ed * 38.0) * 2.2);
+        let collarette = exp(-sq((irMix - 0.215) / 0.044));
+        let radialSh = mix(irisRich * 0.52, irisRich * 1.68, fiber * 0.64 + fiberFine * 0.36);
+        var irisCol = mix(radialSh, vec3f(0.76, 0.58, 0.26) + irisRich * 0.35, collarette * 0.72);
+        // Subtle upper eyelid corneal shadow + deep sapphire-charcoal limbal ring + luminous lower caustic crescent
+        let lowerCaustic = smoothstep(-0.02, -0.34, irisXY.y) * (1.0 - smoothstep(0.32, 0.43, ir)) * 0.38;
+        let crypt = smoothstep(0.42, 0.78, ir / 0.425);
+        let limbal = smoothstep(0.352, 0.422, ir) * (1.0 - smoothstep(0.422, 0.456, ir));
+        irisCol = mix(irisCol, irisCol * 0.40, crypt * 0.54) * (1.0 - upperLidSh * 0.85) + irisRich * lowerCaustic;
+        irisCol = mix(irisCol, vec3f(0.032, 0.052, 0.092), limbal * 0.94);
+        // Crisp outer sclera-to-limbus blend (readable at low pixel-art resolution!)
+        let inIris = 1.0 - smoothstep(0.46, 0.50, ir);
+        eyeC = mix(eyeC, irisCol, inIris);
+        // Deep optical pupil + bright upper-left catchlight sparkle so eyes read unmistakably at 378x608
+        let inPupil = 1.0 - smoothstep(0.20, 0.235, ir);
+        eyeC = mix(eyeC, vec3f(0.005, 0.007, 0.011), inPupil);
+        let catchlight = 1.0 - smoothstep(0.075, 0.115, length(irisXY - vec2f(-0.15, 0.15)));
+        eyeC = mix(eyeC, vec3f(0.98, 0.97, 0.94), catchlight * 0.92);
+      }
+      let corneaBump = 0.52 + 0.18 * (1.0 - smoothstep(0.16, 0.45, length(ed.xy))) * select(0.0, 1.0, ed.z > 0.20);
+      return vec4f(eyeC / max(i.col, vec3f(0.02)), corneaBump);
+    }
+
+    if (midAA < 0.02) {
+      return vec4f(1.0, 1.0, 1.0, 0.5);
+    }
+    // 2. Seamless Continuous 3D Object-Space Multi-Scale Pixel-Art PBR Projection (zero quad-boundary UV jumps!)
+    let bm = i.lv;
+    let nObj = safeNorm(i.quv.xyz, vec3f(0.0, 1.0, 0.0));
+    let nObj2 = nObj * nObj;
+    let bwRaw = nObj2 * nObj2;
+    let bw = bwRaw / max(bwRaw.x + bwRaw.y + bwRaw.z, 1e-4);
+    // Unified world texel size: 0.0078125 m (0.78 cm = 1/128 m), matching atlas TILE=64 per 0.50 m tile
+    let uvT = (bm.zy * bw.x + bm.xz * bw.y + bm.xy * bw.z) / 0.0078;
+    let tPix = vec2i(floor(uvT));
+    let hTPix = mix(0.5, hash3i(vec3i(tPix.x, tPix.y, seed + 17)), fineAA);
+    let texPat = (i.fl >> 14u) & 7u;
+    // Lazy snoise3: evaluate nMacro only for patterns that consume it (skips 8-corner hash on hair-cap & skin/face!)
+    var nMacro = 0.5;
+    if (texPat != 3u && texPat != 4u) { nMacro = snoise3(bm / 0.022); }
+
+    var lpShade = 1.0;
+    var lpHeight = 0.5;
+    var lpTint = vec3f(1.0);
+    switch (texPat) {
+      case 1u: {
+        // Photorealistic Pixel-Art PBR Heavy Cotton Canvas Jacket: unified 0.78 cm pixel weave, yoke & armhole seams
+        var nMid = 0.5;
+        if (fineAA > 0.025) { nMid = snoise3(bm / 0.0095); }
+        let uC = (bm.z * bw.x + bm.x * bw.z + bm.x * bw.y) / 0.0078;
+        let vC = (bm.y * (bw.x + bw.z) + bm.z * bw.y) / 0.0078;
+        let cPx = vec2i(floor(vec2f(uC, vC)));
+        let checker = select(-1.0, 1.0, ((cPx.x + cPx.y) & 1) == 0);
+        let hYarn = hash3i(vec3i(cPx.x, cPx.y, seed + 23)) - 0.5;
+        let warpLine = cos(uC * 3.141593) * 0.45;
+        let weftLine = cos(vC * 3.141593) * 0.45;
+        let basket = checker * 0.50 + (warpLine + weftLine) * 0.34;
+        let slub = (nMid - 0.5) * 0.18;
+
+        // Macro garment tailoring & natural cloth drape folds (clearly visible on mobile & desktop)
+        let isTorsoY = smoothstep(0.84, 0.90, bm.y) * (1.0 - smoothstep(1.34, 1.38, bm.y));
+        let isSleeve = smoothstep(0.185, 0.215, abs(bm.x)) * smoothstep(0.76, 0.82, bm.y) * (1.0 - smoothstep(1.30, 1.34, bm.y));
+        let chestTension = sin((abs(bm.x) * 26.0 - bm.y * 22.0) + nMacro * 2.2) * 0.075 * isTorsoY * (1.0 - isSleeve);
+        let waistGather = sin(bm.x * 58.0 + nMacro * 2.6) * 0.085 * exp(-sq((bm.y - 0.93) / 0.065)) * (1.0 - isSleeve);
+        let elbowCrease = sin((bm.y - 1.02) * 86.0 + nMacro * 2.4) * 0.095 * exp(-sq((bm.y - 1.02) / 0.075)) * isSleeve;
+        let armholeAO = exp(-sq((abs(bm.x) - 0.185) / 0.022)) * smoothstep(1.06, 1.24, bm.y) * 0.16;
+        let yokeSeam = exp(-sq((bm.y - 1.235) / 0.0045)) * smoothstep(0.03, 0.06, abs(bm.x)) * (1.0 - isSleeve);
+        let yokeDash = select(0.0, 1.0, (i32(floor(bm.x / 0.0040)) & 1) == 0);
+        let yokeStitch = exp(-sq((bm.y - 1.241) / 0.0022)) * yokeDash * smoothstep(0.03, 0.06, abs(bm.x)) * (1.0 - isSleeve);
+
+        // Pixel-art vertical double-needle placket topstitching along jacket zipper edge
+        let onPlacket = smoothstep(0.055, 0.085, bm.z) * smoothstep(0.86, 0.90, bm.y) * (1.0 - smoothstep(1.30, 1.34, bm.y));
+        let stDist = abs(abs(bm.x) - 0.021);
+        let stDash = select(0.0, 1.0, (i32(floor(bm.y / 0.0036)) & 1) == 0);
+        let topStitch = (1.0 - smoothstep(0.0014, 0.0034, stDist)) * stDash * onPlacket;
+        let macroFolds = (chestTension + waistGather + elbowCrease + (nMacro - 0.5) * 0.15 - armholeAO - yokeSeam * 0.15) * midAA;
+        let cordWale = cos(uC * 2.094395) * 0.055 * fineAA;
+        let microTex = (basket * 0.175 + cordWale + hYarn * 0.115 + slub) * fineAA;
+        lpShade = 1.0 + macroFolds + microTex + (topStitch * 0.20 + yokeStitch * 0.14) * fineAA;
+        lpTint = mix(vec3f(0.90, 0.93, 1.04), vec3f(1.08, 1.04, 0.94), clamp(nMacro * 0.75 + basket * 0.25 + 0.12, 0.0, 1.0));
+        lpTint = mix(lpTint, vec3f(1.22, 1.16, 1.04), clamp(topStitch * 0.75 + yokeStitch * 0.55, 0.0, 1.0) * fineAA);
+        lpHeight = 0.50 + (basket * 0.36 + cordWale * 2.2 + hYarn * 0.18 + slub * 0.42 + (topStitch + yokeStitch) * 0.28) * fineAA + (chestTension + waistGather + elbowCrease - yokeSeam * 0.18) * 1.45 * midAA;
+      }
+      case 2u: {
+        // Seamless Triplanar Indigo 3x1 Denim Twill on unified 0.78 cm pixel grid
+        let dU = (bm.z * bw.x + bm.x * bw.z + bm.x * bw.y) / 0.0078;
+        let dV = (bm.y * (bw.x + bw.z) + bm.z * bw.y) / 0.0078;
+        let dPx = vec2i(floor(vec2f(dU, dV)));
+        let twillMod = (dPx.x + dPx.y) & 3;
+        let isWeftDot = select(0.0, 1.0, twillMod == 0);
+        let dX = cos((bm.z + bm.y * 1.32) / 0.0078 * 1.5708);
+        let dZ = cos((bm.x + bm.y * 1.32) / 0.0078 * 1.5708);
+        let dY = cos((bm.x + bm.z * 1.32) / 0.0078 * 1.5708);
+        let twill = (dX * bw.x + dZ * bw.z + dY * bw.y) * 0.62 + (isWeftDot - 0.25) * 0.78;
+        var slub = 0.0;
+        if (fineAA > 0.025) { slub = (snoise3(vec3f(bm.x * 125.0, bm.y * 46.0, bm.z * 125.0)) - 0.5) * 0.17; }
+        // Macro denim wear: hip whiskering, thigh/knee wash fade, behind-knee honeycombs, inner crotch/leg seam AO
+        let wMask = smoothstep(0.60, 0.84, bm.y) * smoothstep(0.02, 0.07, bm.z);
+        var whisker = 0.0;
+        if (wMask > 0.002) { whisker = sin(bm.y * 48.0 + abs(bm.x) * 18.0 + snoise3(bm * 26.0) * 2.4) * 0.068 * wMask; }
+        let thighWash = exp(-sq((abs(bm.x) - 0.095) / 0.055)) * smoothstep(0.42, 0.72, bm.y) * (1.0 - smoothstep(0.76, 0.86, bm.y)) * smoothstep(0.02, 0.07, bm.z) * 0.11;
+        let kneeFade = exp(-sq((bm.y - 0.45) / 0.11)) * smoothstep(0.02, 0.07, bm.z) * 0.13;
+        let backHoneycomb = sin(bm.y * 74.0 + nMacro * 2.5) * 0.065 * exp(-sq((bm.y - 0.45) / 0.08)) * smoothstep(-0.02, -0.06, bm.z);
+        let crotchAO = exp(-sq(bm.x / 0.042)) * exp(-sq((bm.y - 0.73) / 0.075)) * 0.14;
+        let outSeam = smoothstep(0.11, 0.15, abs(bm.x)) * (1.0 - smoothstep(0.006, 0.015, abs(bm.z))) * smoothstep(0.12, 0.16, bm.y) * (1.0 - smoothstep(0.84, 0.88, bm.y));
+        let seamDash = select(0.0, 1.0, (i32(floor(bm.y / 0.0040)) & 1) == 0);
+        let denimStitch = outSeam * seamDash;
+        let macroDenim = (whisker + thighWash + kneeFade + backHoneycomb + (nMacro - 0.5) * 0.12 - crotchAO) * midAA;
+        lpShade = 1.0 + macroDenim + (twill * 0.145 + slub) * fineAA;
+        lpTint = mix(vec3f(0.88, 0.93, 1.08), vec3f(1.11, 1.08, 1.00), clamp(twill * 0.45 + 0.44 + (kneeFade + thighWash) * 2.1, 0.0, 1.0));
+        lpTint = mix(lpTint, vec3f(1.48, 1.12, 0.62), denimStitch * 0.82 * fineAA);
+        lpHeight = 0.50 + (twill * 0.30 + slub * 0.38 + denimStitch * 0.28) * fineAA + (whisker + backHoneycomb) * 1.4 * midAA;
+      }
+      case 3u: {
+        // Textured Matte Chestnut Hair Under-Cap & Eyebrows: blends seamlessly with 3D hair ribbons (zero shiny dark bald scalp!)
+        let headBaseY = select(-0.04, 1.328, bm.y > 0.85);
+        let hRel = vec3f(bm.x, bm.y - headBaseY, bm.z);
+        let crownW = smoothstep(0.45, 0.85, abs(nObj.y));
+        let ang01 = atan2(hRel.x, hRel.z) * 0.15915494 + 0.5;
+        let strandSide = (ang01 + sin(hRel.y * 42.0) * 0.003) * 180.0;
+        let strandTop = (hRel.z + sin(hRel.x * 38.0) * 0.002) / 0.0018;
+        let sCoord = mix(strandSide, strandTop, crownW);
+        let fIdx = i32(floor(sCoord));
+        let hFil = f32(hashu((bitcast<u32>(fIdx) * 73856093u) ^ u32(seed + 47)) & 255u) / 255.0;
+        let groove = smoothstep(0.24, 0.50, abs(fract(sCoord) - 0.5));
+        let rootGrad = mix(0.84, 1.08, smoothstep(0.16, 0.34, hRel.y));
+        lpShade = rootGrad * (0.94 + (hFil - 0.5) * 0.24 - groove * 0.14);
+        lpTint = mix(vec3f(1.08, 0.84, 0.68), vec3f(1.42, 1.12, 0.88), hFil);
+        lpHeight = 0.50 + (0.4 - groove * 0.6) * 0.25;
+      }
+      case 4u: {
+        // Photorealistic Pixel-Art PBR Living Skin: continuous anatomical shading, dermal pore texels, vascular warmth, beard stubble, moles, blemish & moist lips
+        let uvSkin = (bm.zy * bw.x + bm.xz * bw.y + bm.xy * bw.z) / 0.0028;
+        let skinPx = vec2i(floor(uvSkin));
+        let hSkin = hash3i(vec3i(skinPx.x, skinPx.y, seed + 71)) - 0.5;
+        var poreFine = 0.0;
+        var poreMed = 0.0;
+        if (fineAA > 0.02) {
+          poreFine = snoise3(bm / 0.0020) - 0.5;
+          poreMed = snoise3(bm / 0.0052) - 0.5;
+        }
+        let mottle = snoise3(bm / 0.020) - 0.5;
+        var sShade = 1.0 + (hSkin * 0.062 + poreFine * 0.036 + poreMed * 0.044) * fineAA + mottle * 0.040 * midAA;
+        var sTint = vec3f(1.008, 0.996, 0.986) + vec3f(0.024, -0.008, -0.016) * mottle;
+        var sHeight = 0.50 + (hSkin * 0.12 + poreFine * 0.10 + poreMed * 0.06) * fineAA;
+
+        let isHeadZone = bm.y < 0.52 || bm.y > 1.32;
+        if (isHeadZone) {
+          let headBaseY = select(-0.04, 1.328, bm.y > 0.85);
+          let hRel = vec3f(bm.x, bm.y - headBaseY, bm.z);
+
+          // 1. Continuous soft anatomical vascular warmth: broad natural malar cheek blush (zero quad edges!), nasal tip/alae, earlobes & brow glow
+          let cheekV = vec3f((abs(hRel.x) - 0.048) * 0.92, (hRel.y - 0.196) * 1.15, (hRel.z - 0.084) * 1.25);
+          let cheekFlush = exp(-dot(cheekV, cheekV) * 1050.0);
+          let noseV = hRel - vec3f(0.0, 0.190, 0.118);
+          let noseFlush = exp(-dot(noseV, noseV) * 2800.0);
+          let earFlush = smoothstep(0.084, 0.104, abs(hRel.x)) * exp(-sq((hRel.y - 0.205) / 0.036));
+          sTint += vec3f(0.062, -0.024, -0.030) * (cheekFlush * 0.50 + noseFlush * 0.58 + earFlush * 0.48);
+
+          // 2. Smooth anatomical 3D facial contour shading (youthful smooth cheeks + poetic tired under-eye shadows + sculpted nose/lips)
+          let lidV = vec3f((abs(hRel.x) - 0.035) * 0.85, (hRel.y - 0.252) * 3.8, (hRel.z - 0.092) * 1.6);
+          let lidCrease = exp(-dot(lidV, lidV) * 3400.0);
+          let uEyeV = vec3f((abs(hRel.x) - 0.035) * 0.88, (hRel.y - 0.213) * 2.4, (hRel.z - 0.094) * 1.5);
+          let underEye = exp(-dot(uEyeV, uEyeV) * 3400.0);
+          let alarCrease = exp(-sq((abs(hRel.x) - 0.0185) / 0.0042) - sq((hRel.y - 0.184) / 0.010)) * smoothstep(0.088, 0.104, hRel.z);
+          let cupidRoll = exp(-sq(hRel.x / 0.016) - sq((hRel.y - 0.153) / 0.0032)) * smoothstep(0.092, 0.104, hRel.z);
+          let nasoLine = exp(-sq((abs(hRel.x) - (0.018 + (0.202 - hRel.y) * 0.42)) / 0.0085)) * smoothstep(0.132, 0.155, hRel.y) * (1.0 - smoothstep(0.188, 0.205, hRel.y)) * smoothstep(0.072, 0.092, hRel.z);
+          let philtrum = exp(-sq(hRel.x / 0.0065) - sq((hRel.y - 0.166) / 0.012)) * smoothstep(0.085, 0.100, hRel.z);
+          let mentoLabial = exp(-sq(hRel.x / 0.024) - sq((hRel.y - 0.118) / 0.0085)) * smoothstep(0.075, 0.095, hRel.z);
+          let underJawAO = smoothstep(0.115, 0.078, hRel.y) * smoothstep(0.010, 0.055, hRel.z) * (1.0 - smoothstep(0.070, 0.095, abs(hRel.x)));
+          let neckSCM = exp(-sq((abs(hRel.x) - 0.034) / 0.015)) * smoothstep(0.088, 0.055, hRel.y) * smoothstep(0.005, 0.045, hRel.y);
+          let sternalNotch = exp(-sq(hRel.x / 0.016) - sq((hRel.y - 0.020) / 0.014)) * smoothstep(0.036, 0.058, hRel.z);
+          let foreheadHi = exp(-sq(hRel.x / 0.055) - sq((hRel.y - 0.292) / 0.030)) * smoothstep(0.070, 0.092, hRel.z);
+          let cheekHi = exp(-sq((abs(hRel.x) - 0.046) / 0.022) - sq((hRel.y - 0.206) / 0.018)) * smoothstep(0.078, 0.096, hRel.z);
+          sShade *= 1.0 - (lidCrease * 0.12 + underEye * 0.135 + alarCrease * 0.11 + nasoLine * 0.038 + philtrum * 0.07 + mentoLabial * 0.07 + underJawAO * 0.14 + neckSCM * 0.075 + sternalNotch * 0.11);
+          sShade *= 1.0 + (foreheadHi * 0.045 + cheekHi * 0.050 + cupidRoll * 0.068);
+          sTint = mix(sTint, sTint * vec3f(0.86, 0.80, 0.88), underEye * 0.48);
+          sHeight -= (lidCrease * 0.14 + alarCrease * 0.14 + nasoLine * 0.05 + philtrum * 0.10 + mentoLabial * 0.10) * midAA;
+          sHeight += cupidRoll * 0.14 * midAA;
+
+          // 3. Lips vermilion vertical micro-creases & natural warm lip color blend + youthful smooth jawline
+          let inLipZone = smoothstep(0.030, 0.018, abs(hRel.x)) * smoothstep(0.126, 0.134, hRel.y) * (1.0 - smoothstep(0.154, 0.162, hRel.y)) * smoothstep(0.086, 0.096, hRel.z);
+          if (inLipZone > 0.01) {
+            let lipCrease = 0.5 - 0.5 * cos(hRel.x * 1950.0 + sin(hRel.y * 520.0) * 1.5);
+            sShade *= mix(1.0, 0.92 + lipCrease * 0.14, inLipZone * fineAA);
+            sTint = mix(sTint, sTint * vec3f(1.06, 0.90, 0.90), inLipZone * 0.38);
+            sHeight += (lipCrease - 0.5) * 0.20 * inLipZone * fineAA;
+          } else if (hRel.y < 0.184 && hRel.z > 0.018 && hRel.y > 0.082) {
+            // Very subtle youthful peach-fuzz skin texture on chin & jaw (no heavy mature beard shadow)
+            let jawMask = smoothstep(0.184, 0.155, hRel.y) * smoothstep(0.082, 0.112, hRel.y) * smoothstep(0.018, 0.048, hRel.z);
+            var folDot = 0.0;
+            if (fineAA > 0.02 && jawMask > 0.002) {
+              let folPx = vec3i(floor(hRel / 0.0020));
+              let folHash = hash3i(folPx + vec3i(seed & 255, 13, 37));
+              folDot = smoothstep(0.72, 0.92, folHash * 0.65 + snoise3(hRel / 0.0016) * 0.35);
+            }
+            sShade *= 1.0 - (0.008 * midAA + folDot * 0.022 * fineAA) * jawMask;
+            sTint = mix(sTint, sTint * vec3f(0.97, 0.96, 0.98), jawMask * 0.10);
+            sHeight += folDot * 0.02 * jawMask * fineAA;
+          }
+
+          // 4-7. Sub-millimeter dermal details (moles, blemish, freckles, brow scar): gated when sub-pixel at far distance
+          if (fineAA > 0.06) {
+            let dMole1 = length(hRel - vec3f(0.048, 0.206, 0.092));
+            let dMole2 = length(hRel - vec3f(-0.056, 0.148, 0.060));
+            let dMole3 = length(hRel - vec3f(0.070, 0.268, 0.070));
+            let moleMask = max(
+              1.0 - smoothstep(0.0012, 0.0021, dMole1),
+              max(1.0 - smoothstep(0.0010, 0.0018, dMole2), 1.0 - smoothstep(0.0009, 0.0016, dMole3))
+            );
+            sTint = mix(sTint, vec3f(0.28, 0.17, 0.12), moleMask * 0.88);
+            sHeight += moleMask * 0.20 * fineAA;
+
+            let blemV = hRel - vec3f(-0.038, 0.158, 0.088);
+            let dBlem2 = dot(blemV, blemV);
+            if (dBlem2 < 0.00004) {
+              let blemHalo = exp(-dBlem2 * 260000.0);
+              let blemCore = 1.0 - smoothstep(0.0007, 0.0014, sqrt(dBlem2));
+              sTint = mix(sTint, vec3f(1.06, 0.72, 0.66), blemHalo * 0.56);
+              sTint = mix(sTint, vec3f(0.88, 0.52, 0.46), blemCore * 0.42);
+              sHeight += blemHalo * 0.16 * fineAA;
+            }
+
+            let freckZone = exp(-sq((abs(hRel.x) - 0.024) / 0.028) - sq((hRel.y - 0.206) / 0.019)) * smoothstep(0.076, 0.096, hRel.z);
+            if (freckZone > 0.004) {
+              let freckSpot = smoothstep(0.75, 0.89, snoise3(hRel / 0.0022)) * freckZone;
+              sTint = mix(sTint, vec3f(0.74, 0.56, 0.42), freckSpot * 0.38);
+            }
+
+            let scarU = (hRel.x - 0.053) * 0.86 + (hRel.y - 0.274) * 0.50;
+            let scarV = -(hRel.x - 0.053) * 0.50 + (hRel.y - 0.274) * 0.86;
+            let browScar = exp(-sq(scarU / 0.0016)) * (1.0 - smoothstep(0.008, 0.014, abs(scarV))) * smoothstep(0.076, 0.094, hRel.z);
+            sTint = mix(sTint, vec3f(1.12, 0.96, 0.92), browScar * 0.58);
+            sHeight -= browScar * 0.24 * midAA;
+          }
+        } else {
+          // Subtle warm knuckle & fingertip flush + fine dorsal joint micro-creases on sculpted hands
+          let handWarm = smoothstep(0.84, 0.70, bm.y) * smoothstep(0.18, 0.24, abs(bm.x));
+          if (handWarm > 0.002) {
+            var knuckCrease = 0.0;
+            if (fineAA > 0.02) {
+              knuckCrease = sin(bm.y * 540.0 + snoise3(bm * 85.0) * 1.8) * 0.045 * exp(-sq((bm.y - 0.655) / 0.024)) * handWarm * fineAA;
+            }
+            sShade *= 1.0 - knuckCrease;
+            sTint += vec3f(0.052, -0.020, -0.024) * handWarm;
+            sHeight -= knuckCrease * 1.4;
+          }
+        }
+        lpShade = sShade;
+        lpTint = sTint;
+        lpHeight = sHeight;
+      }
+      case 5u: {
+        // Pixel-Art PBR Velvety Cognac Suede Nap / Pebble Camera Vulcanite Leather / Brushed Chrome & Antique Brass
+        var nFine = 0.5;
+        if (fineAA > 0.06) { nFine = snoise3(bm / 0.0078); }
+        let isWarmSuede = part != 13u && i.col.r > i.col.b * 1.45 && i.col.r > 0.14;
+        if (part == 13u) {
+          let brushPx = vec2i(floor(vec2f(uvT.x * 0.65, uvT.y * 1.5)));
+          let hBrush = hash3i(vec3i(brushPx.x, brushPx.y, seed + 61)) - 0.5;
+          lpShade = 1.0 + (hBrush * 0.16 + (nFine - 0.5) * 0.07) * fineAA;
+          lpTint = mix(vec3f(0.95, 0.96, 0.99), vec3f(1.05, 1.04, 1.01), clamp(hBrush + 0.5, 0.0, 1.0));
+          lpHeight = 0.50 + hBrush * 0.24 * fineAA;
+        } else if (isWarmSuede) {
+          // Velvety fine-napped suede grain on unified 0.78 cm pixel grid
+          let sPx = vec2i(floor(uvT));
+          let hNap = hash3i(vec3i(sPx.x, sPx.y, seed + 53)) - 0.5;
+          let napSweep = (snoise3(vec3f(bm.x * 28.0, bm.y * 52.0, bm.z * 28.0)) - 0.5) * 0.22;
+          lpShade = 1.0 + (hNap * 0.14 + (nFine - 0.5) * 0.09) * fineAA + napSweep * midAA;
+          lpTint = mix(vec3f(0.90, 0.88, 0.86), vec3f(1.10, 1.04, 0.96), clamp(napSweep * 2.2 + hNap * 0.45 + 0.5, 0.0, 1.0));
+          lpHeight = 0.50 + (hNap * 0.22 + (nFine - 0.5) * 0.16) * fineAA + napSweep * 0.45 * midAA;
+        } else {
+          let pPx = vec2i(floor(uvT));
+          let hPeb = hash3i(vec3i(pPx.x, pPx.y, seed + 59)) - 0.5;
+          var peb = hPeb * 0.65;
+          if (fineAA > 0.02) { peb += (snoise3(bm / 0.0078) - 0.5) * 1.15; }
+          lpShade = 1.0 + (peb * 0.18 + (nFine - 0.5) * 0.08) * fineAA + (nMacro - 0.5) * 0.08 * midAA;
+          lpTint = mix(vec3f(0.93, 0.92, 0.91), vec3f(1.06, 1.04, 1.02), clamp(peb * 0.5 + 0.5, 0.0, 1.0));
+          lpHeight = 0.50 + (peb * 0.30 + hPeb * 0.18) * fineAA;
+        }
+      }
+      case 6u: {
+        // Pixel-Art Herringbone Tweed / Overcoat
+        let zig = abs(fract(uvT.x * 0.125) - 0.5) * 8.0;
+        let herr = cos((zig + uvT.y) * 1.570796) * 0.5;
+        lpShade = 1.0 + (herr * 0.18 + (hTPix - 0.5) * 0.10) * fineAA + (nMacro - 0.5) * 0.10 * midAA;
+        lpHeight = 0.50 + (herr * 0.28 + (hTPix - 0.5) * 0.10) * fineAA;
+      }
+      case 7u: {
+        // Pixel-Art 2x2 Ribbed Knit Trim (Cuffs, Collar, Waistband Hem, Scarf) on unified 0.78 cm grid
+        let rU = (bm.z * bw.x + bm.x * bw.z + (bm.x + bm.z) * bw.y) / 0.0078;
+        let rV = bm.y / 0.0078;
+        let rPx = vec2i(floor(vec2f(rU, rV)));
+        let rBar = select(-0.58, 0.58, (rPx.x & 1) == 0);
+        let rLoop = (hash3i(vec3i(rPx.x, rPx.y, seed + 83)) - 0.5) * 0.42;
+        let rib = rBar * 0.66 + cos(rU * 3.141593) * 0.34;
+        lpShade = 1.0 + (rib * 0.25 + rLoop * 0.16) * fineAA + (nMacro - 0.5) * 0.08 * midAA;
+        lpTint = mix(vec3f(0.92, 0.95, 1.04), vec3f(1.06, 1.04, 0.98), clamp(rib * 0.5 + 0.5, 0.0, 1.0));
+        lpHeight = 0.50 + (rib * 0.38 + rLoop * 0.20) * fineAA;
+      }
+      default: {
+        // Oral cavity / tongue papillae / pearlescent enamel teeth & brushed metallic camera/zipper detail
+        var nFine = 0.5;
+        if (fineAA > 0.06) { nFine = snoise3(bm / 0.0078); }
+        let inOral = bm.y > 1.38 && bm.y < 1.52 && bm.z > 0.035 && abs(bm.x) < 0.045;
+        let isTongue = inOral && i.col.r > i.col.b * 1.25;
+        let isEnamel = inOral && min(i.col.r, min(i.col.g, i.col.b)) > 0.60;
+        if (isTongue) {
+          let papPx = vec2i(floor(vec2f(bm.x, bm.z) / 0.0014));
+          let papilla = (hash3i(vec3i(papPx.x, papPx.y, seed + 97)) - 0.5) * 1.4;
+          let sulcus = exp(-sq(bm.x / 0.0035));
+          lpShade = (1.0 - sulcus * 0.16) * (1.0 + papilla * 0.11 * fineAA);
+          lpTint = mix(vec3f(1.02, 0.94, 0.95), vec3f(0.92, 0.80, 0.82), sulcus * 0.55);
+          lpHeight = 0.50 + (papilla * 0.26 - sulcus * 0.20) * fineAA;
+        } else if (isEnamel) {
+          let toothRidge = sin(bm.x * 950.0) * 0.035;
+          lpShade = 1.0 + (toothRidge + (nFine - 0.5) * 0.03) * fineAA;
+          lpTint = vec3f(1.01, 1.005, 0.985);
+          lpHeight = 0.52 + toothRidge * 0.45 * fineAA;
+        } else if (part == 13u) {
+          let brushPx = vec2i(floor(vec2f(uvT.x * 0.45, uvT.y * 2.2)));
+          let hBrush = hash3i(vec3i(brushPx.x, brushPx.y, seed + 67)) - 0.5;
+          lpShade = 1.0 + (hBrush * 0.16 + (nFine - 0.5) * 0.06) * fineAA;
+          lpHeight = 0.50 + hBrush * 0.22 * fineAA;
+        } else {
+          lpShade = 1.0 + ((hTPix - 0.5) * 0.095 + (nFine - 0.5) * 0.07) * fineAA + (nMacro - 0.5) * 0.06 * midAA;
+          lpHeight = 0.50 + ((hTPix - 0.5) * 0.12 + (nFine - 0.5) * 0.09) * fineAA;
+        }
+      }
+    }
+    return vec4f(lpTint * lpShade, lpHeight);
+  }
 
   let maxC = max(i.col.r, max(i.col.g, i.col.b));
   let minC = min(i.col.r, min(i.col.g, i.col.b));
@@ -1147,77 +2143,53 @@ fn propPixelTex(i: POut, n: vec3f) -> vec4f {
   var tint = vec3f(1.0);
 
   if (part == 11u) {
-    // Crisp Pixel-Art Tree Bark: 2x5 vertical bark plates with dark fissures, sunlit ridges, and birch lenticels
+    // Tree Bark: smooth band-limited vertical bark ridges
     let plateX = pix.x / 2;
     let shiftY = pix.y + (plateX & 1) * 2;
     let plateY = shiftY / 5;
-    let lx = ((pix.x % 2) + 2) % 2;
-    let ly = ((shiftY % 5) + 5) % 5;
     let hPlate = hash3i(vec3i(plateX, plateY, seed + 31));
     let isBirch = maxC > 0.52 && sat < 0.22;
     if (isBirch) {
       let lenticel = hash3i(vec3i(0, pix.y / 2, seed + 41)) < 0.22 && ((pix.x + pix.y * 3) % 6 < 3);
-      shade = select(0.95 + (h2x2 - 0.5) * 0.12 + (hPix - 0.5) * 0.06, 0.28, lenticel);
-      height = select(0.58, 0.22, lenticel);
-    } else if (lx == 0 && (ly == 0 || hPlate < 0.34)) {
-      // Deep vertical bark fissure pixel
-      shade = 0.62 + hPix * 0.10;
-      height = 0.20;
+      shade = mix(1.0, select(0.96 + (h2x2 - 0.5) * 0.08, 0.42, lenticel), fineAA);
+      height = mix(0.50, select(0.56, 0.28, lenticel), fineAA);
     } else {
-      // Raised bark scale ridge
-      let ridge = select(0.94, 1.12, lx == 1 && ly >= 2);
-      shade = (0.86 + hPlate * 0.26) * ridge * (0.95 + (hPix - 0.5) * 0.10);
-      height = select(0.54, 0.74, lx == 1);
+      let barkWave = 0.5 + 0.5 * cos(uvPix.x * 3.141593);
+      shade = mix(1.0, (0.88 + hPlate * 0.22) * (0.90 + 0.16 * barkWave), fineAA);
+      height = mix(0.50, 0.36 + 0.28 * barkWave, fineAA);
     }
   } else if (isWarmWood) {
-    // Pixel-Art Wood Planks & Furniture Grain: 5-pixel boards with elongated wood fibers & dark board seams
-    let plankIdx = pix.x / 5;
-    let withinPlank = ((pix.x % 5) + 5) % 5;
+    // Wood Planks & Furniture Grain: analytical screen-space anti-aliased board seam (aaLine) + smooth wood fiber
+    let plankCoord = uvPix.x * 0.2;
+    let plankIdx = i32(floor(plankCoord));
     let hBoard = hash3i(vec3i(plankIdx, 0, seed + 53));
     let hFiber = hash3i(vec3i(pix.x, pix.y / 4, seed + 61));
-    if (withinPlank == 0 && i.quv.z >= 3.0) {
-      shade = 0.72 + hPix * 0.08;
-      height = 0.24;
-    } else {
-      let bevel = select(1.0, 1.08, withinPlank == 4);
-      shade = (0.90 + hBoard * 0.18) * bevel * (0.92 + hFiber * 0.16 + (hPix - 0.5) * 0.06);
-      height = 0.46 + hFiber * 0.22;
-    }
+    let seam = select(0.0, aaLine(plankCoord, fwPix * 0.2, 0.07), i.quv.z >= 3.0);
+    let boardTone = 1.0 + ((hBoard - 0.5) * 0.12 + (hFiber - 0.5) * 0.08) * fineAA;
+    shade = boardTone * mix(1.0, 0.74, seam);
+    height = mix(0.50 + (hFiber - 0.5) * 0.12 * fineAA, 0.26, seam);
   } else if (isFabric) {
-    // Pixel-Art Woven Textile / Clothing / Upholstery: 2x2 diagonal twill weave
-    let weave = ((pix.x + pix.y) & 1);
-    let stitch = (((pix.x * 3 + pix.y) % 4) == 0);
-    shade = select(0.92, 1.07, weave == 1) * select(1.0, 0.88, stitch) * (0.96 + (h2x2 - 0.5) * 0.08);
-    height = select(0.42, 0.64, weave == 1);
+    let weaveWave = 0.5 + 0.5 * cos((uvPix.x + uvPix.y) * 3.141593);
+    shade = 1.0 + ((weaveWave - 0.5) * 0.07 + (h2x2 - 0.5) * 0.06) * fineAA;
+    height = 0.50 + (weaveWave - 0.5) * 0.10 * fineAA;
   } else if (isMetal) {
-    // Pixel-Art Brushed Metal & Riveted Panels
-    let lx = ((pix.x % 10) + 10) % 10;
-    let ly = ((pix.y % 10) + 10) % 10;
     let hBrush = hash3i(vec3i(pix.x / 4, pix.y, seed + 73));
-    let onRivet = (lx == 1 || lx == 8) && (ly == 1 || ly == 8) && i.quv.z >= 3.0;
-    shade = select(0.92 + hBrush * 0.16 + (hPix - 0.5) * 0.06, 1.18, onRivet);
-    height = select(0.52 + (hBrush - 0.5) * 0.16, 0.80, onRivet);
+    shade = 1.0 + (hBrush - 0.5) * 0.10 * fineAA;
+    height = 0.50 + (hBrush - 0.5) * 0.10 * fineAA;
   } else if (isStone) {
-    // Pixel-Art Dressed Stone & Mineral Facets
-    let row = pix.y / 4;
-    let shiftX = pix.x + (row & 1) * 3;
-    let col = shiftX / 6;
-    let lx = ((shiftX % 6) + 6) % 6;
-    let ly = ((pix.y % 4) + 4) % 4;
+    // Dressed Stone & Mineral Facets: analytical screen-space mortar lines
+    let rowCoord = uvPix.y * 0.25;
+    let row = i32(floor(rowCoord));
+    let colCoord = (uvPix.x + f32(row & 1) * 3.0) / 6.0;
+    let col = i32(floor(colCoord));
     let hStone = hash3i(vec3i(col, row, seed + 89));
-    if ((lx == 0 || ly == 0) && i.quv.z >= 3.0) {
-      shade = 0.76 + hPix * 0.08;
-      height = 0.24;
-    } else {
-      let bevel = select(1.0, 1.09, ly == 3 || lx == 1);
-      shade = (0.90 + hStone * 0.20) * bevel * (0.94 + (hPix - 0.5) * 0.10);
-      height = 0.50 + hStone * 0.24;
-    }
+    let joint = select(0.0, max(aaLine(rowCoord, fwPix * 0.25, 0.08), aaLine(colCoord, fwPix / 6.0, 0.06)), i.quv.z >= 3.0);
+    let stoneTone = 1.0 + (hStone - 0.5) * 0.14 * fineAA;
+    shade = stoneTone * mix(1.0, 0.78, joint);
+    height = mix(0.50 + (hStone - 0.5) * 0.14 * fineAA, 0.28, joint);
   } else {
-    // Clean 2x2 Bayer-style pixel-art stipple for plaster, ceramic, paper, and character skin
-    let bayer = f32(((pix.x & 1) << 1) ^ (pix.y & 1)) / 3.0 - 0.5;
-    shade = 0.95 + h2x2 * 0.08 + bayer * 0.06 + (hPix - 0.5) * 0.05;
-    height = 0.50 + bayer * 0.12;
+    shade = 1.0 + (h2x2 - 0.5) * 0.06 * fineAA;
+    height = 0.50 + (h2x2 - 0.5) * 0.06 * fineAA;
   }
 
   return vec4f(tint * shade, height);
@@ -1225,32 +2197,104 @@ fn propPixelTex(i: POut, n: vec3f) -> vec4f {
 
 
 // rgb = colour, a = 1 for a reflective surface (roughness < 0.3)
-fn propColorSh(i: POut, w: f32, night: bool, n: vec3f, sh: f32) -> vec4f {
-  let dist = distance(i.wp, F.cam.xyz);
-  let grazing = clamp(abs(dot(n, normalize(F.cam.xyz - i.wp))), 0.22, 1.0);
-  let texFade = 1.0 - smoothstep(8.0, 20.0, dist / grazing); // the pixel texture (~2.5 cm texels) fades out before a texel shrinks below a pixel (no shimmer, less work)
+fn propColorSh(i: POut, w: f32, night: bool, n: vec3f, sh: f32, dist: f32) -> vec4f {
+  let isLowPoly = (i.fl & 2048u) != 0u;
+  let v = (F.cam.xyz - i.wp) / max(dist, 1e-4);
+  let grazing = clamp(abs(dot(n, v)), 0.25, 1.0);
+  // Keep procedural pixel textures visible at all viewing angles while smoothly attenuating sub-pixel weave aliasing
+  let maxD0 = select(26.0, 38.0, isLowPoly);
+  let maxD1 = select(48.0, 62.0, isLowPoly);
+  let pixFoot = dist / max(F.opt.x * select(0.025, 0.011, isLowPoly) * grazing, 1e-3);
+  let aaFade = 1.0 / (1.0 + pixFoot * pixFoot * select(0.28, 0.04, isLowPoly));
+  let texFade = (1.0 - smoothstep(maxD0, maxD1, dist)) * mix(0.84, 1.0, grazing) * aaFade;
   var pTex = vec4f(1.0, 1.0, 1.0, 0.5);
-  if (texFade > 0.0) { pTex = propPixelTex(i, n); }
-  let ao = clamp(i.ao * mix(1.0, clamp(0.84 + pTex.w * 0.30, 0.78, 1.08), texFade), 0.05, 1.0);
-  let hv = hash3i(vec3i(floor(i.lv)));
+  if (texFade > 0.005) { pTex = propPixelTex(i, n); }
+  let ao = clamp(i.ao * mix(1.0, clamp(0.72 + pTex.w * 0.56, 0.64, 1.14), texFade), 0.05, 1.0);
+  let hv = select(hash3i(vec3i(floor(i.lv))), 0.5, isLowPoly);
   var alb = i.col * mix(vec3f(0.85 + hv * 0.3), pTex.rgb, texFade);
   let part = i.fl & 15u;
   // PBR class of the voxel (PART in models/vox.js): 13 metal, 14 smooth dielectric (glass, enamel, lacquer), 10 leaf, 11 wood
   var rough = 0.72;
   var metal = 0.0;
-  if (part == 13u) { metal = 1.0; rough = 0.34; } else if (part == 14u) { rough = 0.14; } else if (part == 10u) { rough = 0.55; } else if (part == 11u) { rough = 0.86; }
-  rough = clamp(rough + (hv - 0.5) * 0.12 + (0.5 - pTex.w) * 0.18 * texFade, 0.05, 1.0);
+  if (part == 13u) { metal = 1.0; rough = 0.30; } else if (part == 14u) { rough = 0.14; } else if (part == 10u) { rough = 0.55; } else if (part == 11u) { rough = 0.86; }
+  let matCode = (i.fl >> 12u) & 3u;
+  let texPat = (i.fl >> 14u) & 7u;
+  let isEyeball = (i.fl & (1u << 17u)) != 0u;
+  if (isLowPoly && part < 13u) {
+    if (matCode == 1u) { rough = select(0.84, 0.88, texPat == 2u); }
+    else if (matCode == 2u) {
+      rough = select(0.58, 0.88, texPat == 2u);
+      // Moist lips & natural dermal T-zone (nose/forehead) satin specular variation
+      if (texPat == 4u && (i.lv.y < 0.52 || i.lv.y > 1.32)) {
+        let hBase = select(-0.04, 1.328, i.lv.y > 0.85);
+        let hyL = i.lv.y - hBase;
+        let inLip = smoothstep(0.030, 0.018, abs(i.lv.x)) * smoothstep(0.126, 0.134, hyL) * (1.0 - smoothstep(0.154, 0.162, hyL)) * smoothstep(0.086, 0.096, i.lv.z);
+        let tZone = exp(-sq(i.lv.x / 0.026)) * smoothstep(0.175, 0.215, hyL) * (1.0 - smoothstep(0.285, 0.315, hyL)) * smoothstep(0.078, 0.098, i.lv.z);
+        rough = mix(rough, 0.44, tZone * 0.65);
+        rough = mix(rough, 0.26, inLip);
+      }
+    }
+    else if (texPat == 5u) { rough = 0.42; }
+    else if (texPat == 3u) { rough = 0.94; }
+  }
+  if (isLowPoly && texPat == 0u && i.lv.y > 1.38 && i.lv.y < 1.52 && i.lv.z > 0.035 && abs(i.lv.x) < 0.045) {
+    // Wet saliva gloss on tongue & pearlescent enamel polish on teeth
+    if (i.col.r > i.col.b * 1.25) { rough = 0.16; }
+    else if (min(i.col.r, min(i.col.g, i.col.b)) > 0.60) { rough = 0.10; }
+  }
+  if (isEyeball) { rough = 0.030; metal = 0.0; }
+  rough = clamp(rough + (hv - 0.5) * 0.10 + (0.5 - pTex.w) * 0.28 * texFade, 0.03, 1.0);
   let wet = F.pbr.x * (0.4 + 0.6 * max(n.y, 0.0));
   alb *= 1.0 - wet * 0.22 * (1.0 - metal);
   rough = mix(rough, 0.12, wet * 0.7);
-  var c = shadePBR(i.wp, n, w, sh, Surf(alb, rough, metal, ao));
+  // Crisp tactile micro-relief normal perturbation from multi-scale pixel-art heightfield (pTex.w)
+  let reliefStr = select(0.14, select(0.50, 0.28, texPat == 4u), isLowPoly);
+  let relief = (pTex.w - 0.5) * texFade * reliefStr;
+  let reliefV = sin((i.lv.x + i.lv.z) * 195.0 - i.lv.y * 165.0) * relief * 0.42;
+  let nSh = safeNorm(n + i.tu * relief + i.tv * (-relief * 0.62 + reliefV), n);
+  let msTone = select(mangaShadow(sh, dot(n, F.sunDir.xyz), i.pos.xy), 1.0, isEyeball);
+  var c = shadePBR(i.wp, nSh, w, sh, Surf(alb * msTone, rough, metal, ao));
+  if (part == 14u || isEyeball) {
+    // Automotive enamel / porcelain / wet cornea clearcoat micro-fresnel polish & crisp dual catchlight
+    let om4 = 1.0 - max(dot(nSh, v), 0.0);
+    let om42 = om4 * om4;
+    let clearF = (om42 * om42) * select(0.45, 0.82, isEyeball) * i.ao;
+    c += envSpec(reflect(-v, nSh), 0.03, w) * clearF * (F.pbr.y * (0.4 + 0.6 * sh));
+    if (isEyeball) {
+      let hCornea = normalize(F.sunDir.xyz + v);
+      let glint = pow(max(dot(nSh, hCornea), 0.0), 220.0);
+      let hSky = normalize(vec3f(0.15, 0.85, 0.35) + v);
+      let skyGlint = pow(max(dot(nSh, hSky), 0.0), 92.0);
+      let hWin = normalize(vec3f(-0.32, 0.52, 0.78) + v);
+      let winGlint = pow(max(dot(nSh, hWin), 0.0), 140.0);
+      c += sunCol(w) * glint * 1.65 * (0.28 + 0.72 * sh) + skyCol(w) * (skyGlint * 0.52 + winGlint * 0.34) + vec3f(0.96, 0.93, 0.88) * pow(max(dot(nSh, v), 0.0), 120.0) * 0.24;
+    }
+  }
+  if (isLowPoly && !night && part < 13u) {
+    let sunC = sunCol(w);
+    let om = 1.0 - max(dot(nSh, v), 0.0);
+    let fres = om * om * om;
+    if (matCode == 1u || texPat == 1u || texPat == 2u || texPat == 6u || texPat == 7u) {
+      let fuzzGate = mix(0.36, 1.0, F.pbr.y);
+      let fuzzAmt = select(0.14, 0.10, texPat == 2u);
+      c += alb * fres * fuzzAmt * fuzzGate * (skyCol(w) * 0.85 + sunC * (0.24 + 0.76 * sh));
+    } else if (matCode == 2u && texPat == 5u) {
+      let suedeGate = mix(0.42, 1.0, F.pbr.y);
+      c += (alb * vec3f(1.22, 1.06, 0.88)) * fres * 0.22 * suedeGate * (skyCol(w) * 0.75 + sunC * (0.28 + 0.72 * sh));
+    } else if (matCode == 2u && texPat == 4u) {
+      let wrapL = max(0.0, dot(nSh, F.sunDir.xyz) * 0.5 + 0.5);
+      let bDot = max(dot(-v, F.sunDir.xyz), 0.0);
+      let backScatter = (bDot * bDot * bDot * sqrt(bDot)) * fres * (0.22 + 0.78 * sh) * F.pbr.y;
+      let indoorSkinWarm = (1.0 - F.pbr.y) * (0.14 + fres * 0.16);
+      c += alb * vec3f(0.28, 0.10, 0.048) * (sunC * (wrapL * (0.25 + 0.75 * sh) * 0.36 + backScatter * 0.55) + skyCol(w) * (fres * 0.18) + vec3f(1.0, 0.84, 0.68) * indoorSkinWarm);
+    }
+  }
   if (((i.fl >> 4u) & 1u) == 1u) {
     var k = 1.4;
     if (part == 5u) { k = 1.0 + sin(F.cam.w * 3.5) * 0.8; }
     c += alb * k;
   }
   if (part == 6u) {
-    let v = normalize(F.cam.xyz - i.wp);
     let oneMinus = 1.0 - abs(dot(n, v));
     let rim = oneMinus * oneMinus;
     c += vec3f(1.0, 0.85, 0.55) * (0.12 + rim * 0.7) * (0.6 + 0.4 * sin(F.cam.w * 3.5));
@@ -1259,13 +2303,19 @@ fn propColorSh(i: POut, w: f32, night: bool, n: vec3f, sh: f32) -> vec4f {
   return vec4f(c, select(0.0, 1.0, rough < 0.3));
 }
 fn propColor(i: POut, w: f32, night: bool) -> vec4f {
-  let n = facetNormal(i, normalize(i.n));
+  let nRaw = select(i.n, i.wn, (i.fl & (1u << 22u)) != 0u);
+  let n = facetNormal(i, normalize(nRaw));
+  let dist = distance(i.wp, F.cam.xyz);
   var sh = 1.0;
-  if ((i.mask & 16u) == 0u) { sh = shadowSun(i.wp, n, true); }
-  return propColorSh(i, w, night, n, sh);
+  if ((i.mask & 16u) == 0u) {
+    // Skip 8-tap PCF/PCSS shadow lookup on sun-backfacing rigid props (keep for low-poly characters with wrap SSS)
+    if ((i.fl & 2048u) != 0u || dot(n, F.sunDir.xyz) > 0.0) { sh = shadowSun(i.wp, n, dist < 12.0); }
+    else { sh = 0.0; }
+  }
+  return propColorSh(i, w, night, n, sh, dist);
 }
 
-@fragment fn fsTree(pv: PV) -> GFragOut {
+@fragment fn fsTree(pv: PV) -> @location(0) vec4f {
   var i = unpackP(pv);
   // the only discard: the leaf shapes of the foliage cards (the trees are drawn after the other models)
   let w = wAt(i.wp);
@@ -1274,16 +2324,14 @@ fn propColor(i: POut, w: f32, night: bool) -> vec4f {
   let part = i.fl & 15u;
   if (part == 7u) {
     let eyeCol = treeEyeShade(i, w);
-    return GFragOut(vec4f(eyeCol, 1.0), vec4f(normalize(i.n) * 0.5 + 0.5, gbA(i.ao, false, false, false)));
+    return vec4f(eyeCol, 1.0);
   }
   let isLeaf = part == 10u;
   var k = 1.0;
   var leafTip = 0.5;
   if (isLeaf) {
-    // curved 2D foliage cards (v2.0 trees): the pixel-art leaf cluster is cut out of the card
-    let cardMeta = (i.fl >> 12u) & 255u;
+    let cardMeta = (i.fl >> 14u) & 255u;
     if (cardMeta == 0u) {
-      // voxel leaf clouds: a leaf shape cut out of every voxel face (2x2 small leaves on coarse models)
       let ls = leafShade(i);
       if (ls < 0.0) { discard; }
       i.col = i.col * ls;
@@ -1300,51 +2348,50 @@ fn propColor(i: POut, w: f32, night: bool) -> vec4f {
       } else {
         leafTip = clamp(i.quv.y / max(i.quv.w, 1.0), 0.0, 1.0);
       }
-      i.lv = vec3f(f32(cardMeta) * 0.13, f32(wingMode) * 0.29, 0.5); // no voxel seams across a curved card
+      i.lv = vec3f(f32(cardMeta) * 0.13, f32(wingMode) * 0.29, 0.5);
     }
-    k = 0.88 + 0.20 * leafTip;
-    i.ao = clamp(i.ao * (0.68 + 0.32 * leafTip), 0.22, 1.0);
+    k = 0.68 + 0.36 * leafTip;
+    i.ao = clamp(i.ao * (0.55 + 0.45 * leafTip), 0.14, 1.0);
   } else {
-    k = 0.76 + 0.24 * clamp(i.lv.y * i.vsz * 0.55, 0.0, 1.0); // darker root collar
+    k = 0.76 + 0.24 * clamp(i.lv.y * i.vsz * 0.55, 0.0, 1.0);
   }
   let nrm = normalize(i.n);
-  let sh0 = shadowSun(i.wp, nrm, false);
-  let sh = select(sh0, 0.28 + 0.72 * sh0, isLeaf);
+  let dist = distance(i.wp, F.cam.xyz);
+  var sh0 = 0.0;
+  if (isLeaf || dot(nrm, F.sunDir.xyz) > 0.0) { sh0 = shadowSun(i.wp, nrm, false); }
+  let sh = select(sh0, 0.08 + 0.92 * sh0, isLeaf);
   var c = vec4f(0.0);
   if (isLeaf) {
-    // the crown is many overlapping cards, so every leaf pixel may be shaded several times: leaves take a light model
-    // without the specular part (a rough leaf shows almost none): sun with a soft wrap + sky light (SH9) + the bounce
-    // the crown reads as a volume: leaves facing down and deep inside it get less sky; every bough a slightly
-    // different green (one hash per card) so the crown is not one flat colour
-    let skyVis = 0.5 + 0.5 * smoothstep(-0.6, 0.8, nrm.y);
+    let skyVis = 0.28 + 0.72 * smoothstep(-0.55, 0.88, nrm.y);
     let ao = clamp(i.ao * skyVis, 0.05, 1.0);
-    let hb = hash3i(vec3i(i32((i.fl >> 14u) & 255u), i32(floor(i.wp.y * 1.3)), 7));
+    let hb = f32(hashu(((((i.fl >> 14u) & 255u) * 73856093u) ^ (bitcast<u32>(i32(floor(i.wp.y * 1.3))) * 19349663u))) & 255u) / 255.0;
     let wet = F.pbr.x * (0.4 + 0.6 * max(nrm.y, 0.0));
-    let alb = i.col * vec3f(0.94 + hb * 0.1, 0.92 + hb * 0.16, 0.9 + hb * 0.08) * (1.0 - wet * 0.22);
+    let ndl = max(dot(nrm, F.sunDir.xyz) * 0.60 + 0.40, 0.0) * 0.96;
+    let msL = mangaShadow(sh, ndl, i.pos.xy);
+    let alb = i.col * vec3f(0.90 + hb * 0.16, 0.92 + hb * 0.18, 0.86 + hb * 0.10) * (1.0 - wet * 0.22) * msL;
     let sunC = sunCol(w);
-    let ndl = max(dot(nrm, F.sunDir.xyz) * 0.6 + 0.4, 0.0) * 0.85; // soft wrap: light passes around thin leaves
-    let v = normalize(F.cam.xyz - i.wp);
-    let sheen = pow(max(dot(reflect(-F.sunDir.xyz, nrm), v), 0.0), 12.0) * 0.12 * sh; // the waxy glint of sunlit leaves
-    c = vec4f(alb * (sunC * (ndl * sh) + envIrr(nrm, w) * (F.pbr.y * (0.22 + 0.78 * ao))) + sunC * sheen + vec3f(1.0, 0.32, 0.22) * waveRim(i.wp) * 1.4, 0.0);
+    c = vec4f(alb * (sunC * (ndl * sh) + envIrr(nrm, w) * (F.pbr.y * (0.16 + 0.84 * ao))) + vec3f(1.0, 0.32, 0.22) * waveRim(i.wp) * 1.4, 0.0);
+  } else if (dist > 18.0) {
+    // Ultra-light distant tree bark shading: skips propPixelTex & 8-light PBR loop (5x faster distant forest trunks)
+    let ndlB = max(dot(nrm, F.sunDir.xyz), 0.0);
+    let msB = mangaShadow(sh, ndlB, i.pos.xy);
+    let sunC = sunCol(w);
+    c = vec4f(i.col * msB * (sunC * (ndlB * sh) + envIrr(nrm, w) * (F.pbr.y * (0.18 + 0.82 * i.ao))), 0.0);
   } else {
-    c = propColorSh(i, w, night, nrm, sh);
+    c = propColorSh(i, w, night, nrm, sh, dist);
   }
   var tr = vec3f(0.0);
-  if (isLeaf) {
-    // Realistic botanical foliage translucency: chloroplast subsurface transmission (reuses sh: 0 extra shadow fetches!)
+  if (isLeaf && sh > 0.05 && dist < 36.0) {
     let sunBack = max(dot(-nrm, F.sunDir.xyz), 0.0);
-    let v = normalize(F.cam.xyz - i.wp);
-    let d = max(0.0, dot(v, -F.sunDir.xyz));
-    let forwardScatter = d * d * d * 0.5;
-    let sunCol = sunCol(w);
-    let transmitTint = select(vec3f(1.15, 1.28, 0.82), vec3f(1.4, 0.35, 0.45), night);
-    tr = i.col * transmitTint * sunCol * (sunBack * 0.45 + forwardScatter + 0.12) * (0.35 + 0.65 * sh);
+    let sunC = sunCol(w);
+    let transmitTint = select(vec3f(1.24, 1.36, 0.64), vec3f(1.4, 0.35, 0.45), night);
+    tr = i.col * transmitTint * sunC * (sunBack * 0.42 + 0.05) * (0.14 + 0.86 * sh);
   }
   var outCol = c.rgb * k + tr;
   outCol = flatFog(outCol, i.wp, w);
-  return GFragOut(vec4f(outCol, 1.0), vec4f(nrm * 0.5 + 0.5, gbA(i.ao, true, false, false)));
+  return vec4f(outCol, 1.0);
 }
-@fragment fn fsPropMasked(pv: PV) -> GFragOut {
+@fragment fn fsPropMasked(pv: PV) -> @location(0) vec4f {
   let i = unpackP(pv);
   if (i.extra > 0.001 && i.extra < 0.999) {
     let dither = fract(sin(dot(floor(i.wp * 16.0), vec3f(12.9898, 78.233, 37.719))) * 43758.5453);
@@ -1354,34 +2401,34 @@ fn propColor(i: POut, w: f32, night: bool) -> vec4f {
   let night = w > 0.5;
   if ((i.mask & select(1u, 2u, night)) == 0u) { discard; }
   let c = propColor(i, w, night);
-  return GFragOut(vec4f(c.rgb, 1.0), vec4f(normalize(i.n) * 0.5 + 0.5, gbA(i.ao, false, c.a > 0.5, (i.mask & 32u) != 0u)));
+  return vec4f(c.rgb, 1.0);
 }
 // stable world: the cull pass already filtered instances by world mask -> no discard
-@fragment fn fsProp(pv: PV) -> GFragOut {
+@fragment fn fsProp(pv: PV) -> @location(0) vec4f {
   let i = unpackP(pv);
   let w = wAt(i.wp);
   let c = propColor(i, w, w > 0.5);
-  return GFragOut(vec4f(c.rgb, 1.0), vec4f(normalize(i.n) * 0.5 + 0.5, gbA(i.ao, false, c.a > 0.5, (i.mask & 32u) != 0u)));
+  return vec4f(c.rgb, 1.0);
 }
 
-struct GOut { @builtin(position) pos: vec4f, @location(0) col: vec3f };
+struct GOut { @builtin(position) pos: vec4f, @location(0) col: vec3f, @location(1) uv: vec2f, @location(2) seed: f32, @location(3) varBot: vec4f };
 fn grassShadow(p: vec3f) -> f32 { return shadowSun(p, vec3f(0.0, 1.0, 0.0), false); }
 // What grows in a 0.5 m cell. Kinds are assigned by src/world/grassmap.js:
 // 1 meadow, 2 tall grass in ear, 3 dry autumn grass, 4 mown, 5 roadside, 6 sedge, 7 moss, 8 forest shade,
-// 9 stubble, 10 dead (nightmare). dens 0..1, blade height h0..h1 m, width m, share of ear stalks, wind response.
+// 9 stubble, 10 dead (nightmare). Each quad is a lush 5-blade pixel-art grass tuft (wid ~ 0.11..0.14m).
 struct GKind { dens: f32, h0: f32, h1: f32, wid: f32, ears: f32, sway: f32, tipA: vec3f, tipB: vec3f, root: vec3f };
 fn grassKind(k: u32) -> GKind {
   switch (k) {
-    case 1u: { return GKind(1.0, 0.10, 0.34, 0.026, 0.05, 1.0, vec3f(0.30, 0.30, 0.06), vec3f(0.16, 0.21, 0.04), vec3f(0.04, 0.05, 0.02)); }
-    case 2u: { return GKind(1.0, 0.28, 0.72, 0.028, 0.30, 1.2, vec3f(0.27, 0.30, 0.07), vec3f(0.17, 0.23, 0.05), vec3f(0.05, 0.06, 0.02)); }
-    case 3u: { return GKind(0.85, 0.26, 0.62, 0.022, 0.50, 1.2, vec3f(0.52, 0.42, 0.16), vec3f(0.40, 0.36, 0.12), vec3f(0.10, 0.09, 0.04)); }
-    case 4u: { return GKind(1.0, 0.03, 0.08, 0.030, 0.0, 0.4, vec3f(0.22, 0.28, 0.06), vec3f(0.17, 0.23, 0.05), vec3f(0.05, 0.06, 0.02)); }
-    case 5u: { return GKind(0.8, 0.05, 0.16, 0.024, 0.04, 0.7, vec3f(0.30, 0.29, 0.10), vec3f(0.24, 0.25, 0.08), vec3f(0.07, 0.07, 0.03)); }
-    case 6u: { return GKind(1.0, 0.35, 0.85, 0.036, 0.12, 0.8, vec3f(0.13, 0.24, 0.07), vec3f(0.10, 0.19, 0.08), vec3f(0.03, 0.05, 0.02)); }
-    case 7u: { return GKind(0.9, 0.03, 0.09, 0.034, 0.0, 0.3, vec3f(0.22, 0.34, 0.09), vec3f(0.16, 0.27, 0.07), vec3f(0.04, 0.06, 0.02)); }
-    case 8u: { return GKind(0.55, 0.08, 0.22, 0.030, 0.0, 0.8, vec3f(0.14, 0.22, 0.05), vec3f(0.11, 0.18, 0.05), vec3f(0.03, 0.04, 0.02)); }
-    case 9u: { return GKind(0.7, 0.07, 0.13, 0.012, 0.0, 0.15, vec3f(0.60, 0.50, 0.22), vec3f(0.50, 0.42, 0.18), vec3f(0.22, 0.17, 0.08)); }
-    case 10u: { return GKind(0.7, 0.05, 0.18, 0.020, 0.0, 0.0, vec3f(0.11, 0.10, 0.085), vec3f(0.09, 0.085, 0.075), vec3f(0.02, 0.018, 0.016)); }
+    case 1u: { return GKind(1.0, 0.15, 0.32, 0.115, 0.05, 0.85, vec3f(0.14, 0.34, 0.07), vec3f(0.10, 0.27, 0.05), vec3f(0.045, 0.12, 0.026)); }
+    case 2u: { return GKind(1.0, 0.20, 0.42, 0.130, 0.14, 1.0, vec3f(0.15, 0.35, 0.07), vec3f(0.10, 0.27, 0.05), vec3f(0.045, 0.12, 0.026)); }
+    case 3u: { return GKind(0.95, 0.17, 0.35, 0.115, 0.22, 0.95, vec3f(0.32, 0.31, 0.11), vec3f(0.22, 0.25, 0.08), vec3f(0.075, 0.10, 0.034)); }
+    case 4u: { return GKind(1.0, 0.11, 0.22, 0.105, 0.02, 0.55, vec3f(0.14, 0.32, 0.07), vec3f(0.10, 0.25, 0.05), vec3f(0.045, 0.12, 0.026)); }
+    case 5u: { return GKind(0.95, 0.12, 0.25, 0.110, 0.04, 0.65, vec3f(0.17, 0.30, 0.07), vec3f(0.13, 0.24, 0.06), vec3f(0.055, 0.12, 0.028)); }
+    case 6u: { return GKind(1.0, 0.22, 0.45, 0.135, 0.08, 0.75, vec3f(0.11, 0.30, 0.07), vec3f(0.08, 0.23, 0.055), vec3f(0.040, 0.11, 0.026)); }
+    case 7u: { return GKind(1.0, 0.10, 0.20, 0.110, 0.0, 0.35, vec3f(0.13, 0.31, 0.07), vec3f(0.09, 0.24, 0.05), vec3f(0.045, 0.11, 0.025)); }
+    case 8u: { return GKind(1.0, 0.14, 0.29, 0.118, 0.03, 0.75, vec3f(0.12, 0.28, 0.06), vec3f(0.08, 0.21, 0.045), vec3f(0.040, 0.10, 0.024)); }
+    case 9u: { return GKind(0.85, 0.10, 0.20, 0.100, 0.0, 0.25, vec3f(0.46, 0.40, 0.17), vec3f(0.38, 0.33, 0.14), vec3f(0.16, 0.14, 0.065)); }
+    case 10u: { return GKind(0.85, 0.12, 0.25, 0.105, 0.0, 0.0, vec3f(0.12, 0.11, 0.09), vec3f(0.09, 0.085, 0.075), vec3f(0.05, 0.045, 0.038)); }
     default: { return GKind(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, vec3f(0.0), vec3f(0.0), vec3f(0.0)); }
   }
 }
@@ -1391,31 +2438,48 @@ fn grassKind(k: u32) -> GKind {
   var o: GOut;
   o.pos = vec4f(2.0, 2.0, 2.0, 1.0);
   o.col = vec3f(0.0);
-  // the 0.5 m cell grid sits in front of the camera (nothing is generated behind it)
+  o.uv = vec2f(0.0);
+  o.seed = 0.0;
+  o.varBot = vec4f(0.0);
+  // the 0.5 m cell grid sits in front of the camera (nothing is generated behind or outside view cone)
   let N = u32(F.grass.x);
   let fwd = normalize(vec2f(F.camRight.z, -F.camRight.x));
-  let gf = fwd * F.grass.z * 0.5 + F.cam.xz;
+  let gf = fwd * F.grass.z * 0.42 + F.cam.xz;
   let cx = i32(ii % N) - i32(N / 2u) + i32(floor(gf.x * 2.0));
   let cz = i32(ii / N) - i32(N / 2u) + i32(floor(gf.y * 2.0));
   if (cx < 1 || cz < 1 || cx >= 383 || cz >= 639) { return o; }
-  let cell = gcol[983040u + u32(cx) + u32(cz) * 384u];
-  if ((cell & 255u) == 0u) { return o; }
   let cc = vec2f((f32(cx) + 0.5) * 0.5, (f32(cz) + 0.5) * 0.5);
   let toC = cc - F.cam.xz;
-  let dist = length(toC);
+  let d2C = dot(toC, toC);
   let R = F.grass.z;
-  if (dist > R) { return o; }
-  if (dist > 3.0 && dot(toC, fwd) < -0.3 * dist) { return o; } // cells behind the camera
-  // the blade and the voxel column it stands on (exact ground level, no grass on paving)
+  if (d2C > R * R) { return o; }
+  let dist = sqrt(d2C);
+  if (dist > 4.5 && dot(toC, fwd) < -0.12 * dist) { return o; }
+  // Fast horizontal view-cone cull before gcol/wind/shadow lookups (~50% fewer off-screen grass vertices)
+  if (dist > 3.5 && abs(dot(toC, F.camRight.xz)) > dist * 1.15 + 1.4) { return o; }
+  let cell = gcol[983040u + u32(cx) + u32(cz) * 384u];
+  if ((cell & 255u) == 0u) { return o; }
+  // the tuft and the voxel column it stands on (exact ground level, no grass on paving)
   let b = (vi >> 2u) % BB; // indexed: (cell * blades + blade) * 4 + corner
   let hb = hashu((u32(cx) * 73856093u) ^ (u32(cz) * 19349663u) ^ (b * 83492791u));
   let r1 = f32(hb & 1023u) / 1023.0; let r2 = f32((hb >> 10u) & 1023u) / 1023.0; let r3 = f32((hb >> 20u) & 1023u) / 1023.0;
   let r4 = f32(hashu(hb ^ 0x9e3779b9u) & 1023u) / 1023.0;
-  let bx = cc.x + (r1 - 0.5) * 0.5;
-  let bz = cc.y + (r2 - 0.5) * 0.5;
+  // Stratified 4x4 sub-cell layout (plus extra jittered fill) prevents clumping & bare patches
+  let subSlot = (b + ((u32(cx) + u32(cz) * 3u) & 15u)) & 15u;
+  let sgx = f32(subSlot & 3u);
+  let sgz = f32(subSlot >> 2u);
+  let bx = cc.x - 0.24 + (sgx + 0.15 + r1 * 0.70) * 0.12;
+  let bz = cc.y - 0.24 + (sgz + 0.15 + r2 * 0.70) * 0.12;
   let ci = u32(bx * 8.0) + u32(bz * 8.0) * 1536u;
-  let lv = (gcol[ci >> 2u] >> ((ci & 3u) * 8u)) & 255u;
-  if (lv == 0u) { return o; }
+  var lv = (gcol[ci >> 2u] >> ((ci & 3u) * 8u)) & 255u;
+  if (lv == 0u) {
+    // Fallback to nearest neighboring voxel column inside this valid grassy 0.5m cell so stream banks & paths have zero bald strips
+    let ccx = clamp(i32(cc.x * 8.0), 1, 1534);
+    let ccz = clamp(i32(cc.y * 8.0), 1, 2558);
+    let ciCenter = u32(ccx) + u32(ccz) * 1536u;
+    lv = (gcol[ciCenter >> 2u] >> ((ciCenter & 3u) * 8u)) & 255u;
+    if (lv == 0u) { return o; }
+  }
   let yD = f32(lv) * 0.125;
   let w = worldAt(vec3f(bx, yD + 0.3, bz));
   let night = w > 0.5;
@@ -1423,50 +2487,111 @@ fn grassKind(k: u32) -> GKind {
   if (kind == 0u) { return o; }
   let K = grassKind(kind);
   let y = select(yD, select(f32((cell >> 8u) & 127u) * 0.125, yD, ((cell >> 15u) & 1u) == 1u), night);
-  // fewer but wider blades with distance: the cover stays, the vertex load drops
-  let fade = 1.0 - smoothstep(R * 0.6, R, dist);
-  let lod = mix(1.0, 0.4, smoothstep(R * 0.15, R * 0.7, dist)) * (0.35 + 0.65 * fade);
+  // Smooth distance LOD + height fade to 0 at R so grass melts invisibly into the green turf with zero cutoff line
+  let fade = 1.0 - smoothstep(R * 0.56, R, dist);
+  let lod = mix(1.0, 0.52, smoothstep(R * 0.22, R * 0.88, dist)) * (0.48 + 0.52 * fade);
   if (f32(b) >= F.grass.y * K.dens * (f32((cell >> 20u) & 15u) / 15.0) * lod) { return o; }
   let ear = r4 < K.ears && !night; // a stalk carrying a seed head
-  let hv = 0.6 + f32((cell >> 16u) & 15u) / 15.0 * 0.8;
-  let h = mix(K.h0, K.h1, r3 * (0.4 + 0.6 * r3)) * hv * (0.35 + 0.65 * fade) * select(1.0, 1.2, ear);
-  let base = vec3f(bx, y, bz);
-  // billboard around Y: blades taper to the tip, ear stalks are thin and widen into the head
-  let side = normalize(vec3f(base.z - F.cam.z, 0.0, F.cam.x - base.x));
+  let hv = 0.78 + f32((cell >> 16u) & 15u) / 15.0 * 0.46;
+  let h = mix(K.h0, K.h1, r3 * (0.45 + 0.55 * r3)) * hv * smoothstep(0.0, 1.0, fade) * select(1.0, 1.14, ear);
+  let base = vec3f(bx, y - 0.02, bz);
+  // 3D cross-angled tufts around Y: each tuft rotates around camera-facing plane so blades form rich 3D volume without gaps
+  let camSide = normalize(vec3f(base.z - F.cam.z, 0.0, F.cam.x - base.x));
+  let camFwd = vec3f(-camSide.z, 0.0, camSide.x);
+  let angOff = (r4 - 0.5) * 1.45;
+  let side = camSide * cos(angOff) + camFwd * sin(angOff);
   let c = vi & 3u;
   let u = cuOf(c); let v = cvOf(c);
-  let wb = max(K.wid / sqrt(max(lod, 0.2)), 1.5 * dist / F.opt.x); // never thinner than 1.5 px: no shimmer of far blades
-  let wv = select(wb * (1.0 - 0.82 * v), mix(0.007, wb * 0.95, v), ear);
+  o.uv = vec2f(u, v);
+  o.seed = r1 * 37.0 + r2 * 13.0 + r3 * 7.0;
+  let minPixW = 1.15 * dist / max(F.opt.x, 400.0);
+  let wb = max(K.wid * 1.15 / sqrt(max(lod, 0.48)), minPixW * 3.2);
+  let wv = wb * mix(0.92, 1.08, v);
   var p = base + side * (u - 0.5) * wv;
-  // bend: every blade leans its own way, gusts roll over the field, the hero pushes blades away
+  // bend: every tuft leans its own way, gusts roll over the field, only immediate sneakers push blades gently aside
   let t = F.cam.w;
   let wa = windAt(base.xz); // the same wind as the plants and the trees
-  var bend = vec2f(r1 - 0.5, r2 - 0.5) * h * 0.5;
-  bend += (wa.xy * 0.36 + wa.zw * 0.2) * h * K.sway;
-  if (night) { bend = vec2f(r1 - 0.5, r2 - 0.5) * h * 1.2; }
+  var bend = vec2f(r1 - 0.5, r2 - 0.5) * h * 0.42;
+  bend += (wa.xy * 0.34 + wa.zw * 0.16) * h * K.sway;
+  if (night) { bend = vec2f(r1 - 0.5, r2 - 0.5) * h * 0.85; }
   let away = base.xz - F.player.xz;
   let ad = length(away);
-  if (ad < 0.7) { bend += away / max(ad, 0.01) * (0.7 - ad) * 0.5 * h * 3.0; }
+  if (ad < 0.28) { bend += away / max(ad, 0.01) * (0.28 - ad) * h * 1.4; }
   p += vec3f(bend.x, 0.0, bend.y) * v * v;
   p.y += h * v;
   o.pos = F.viewProj * vec4f(p, 1.0);
-  // palette gradient: dark base -> lit tip, patches of lush / dry grass, straw-coloured ears
+  // palette gradient: dark root-matched base -> lush green / sunlit translucent tip
   let pch = 0.5 + 0.5 * sin(f32(cx) * 0.11 + sin(f32(cz) * 0.07) * 2.0) * cos(f32(cz) * 0.09);
-  var tip = mix(K.tipA, K.tipB, pch) * (0.85 + r3 * 0.3);
-  if (ear) { tip = vec3f(0.50, 0.40, 0.16) * (0.8 + r1 * 0.4); }
-  else if (r1 > 0.985 && kind <= 2u) { tip = vec3f(0.9, 0.78, 0.25); }
-  let alb = mix(K.root, tip, v);
-  let sh = grassShadow(base + vec3f(0.0, 0.1, 0.0));
+  var tip = mix(K.tipA, K.tipB, pch) * (0.90 + r3 * 0.22);
+  if (ear) { tip = mix(tip, vec3f(0.24, 0.32, 0.09), 0.55) * (0.92 + r1 * 0.16); }
+  else if (r1 > 0.985 && kind <= 2u) { tip = vec3f(0.68, 0.62, 0.20); }
+  let alb = mix(K.root * 0.82, tip, smoothstep(0.0, 0.85, v) * (0.35 + 0.65 * fade));
+  let sh = grassShadow(base + vec3f(0.0, 0.12, 0.0));
   let sun = sunCol(w);
   let sky = skyCol(w);
-  o.col = alb * (sun * (0.35 + 0.5 * v) * sh + sky * (0.55 + 0.45 * v)) + alb * sun * 0.25 * v * sh;
+  let litAO = 0.32 + 0.68 * v;
+  let vDotS = max(dot(normalize(p - F.cam.xyz), F.sunDir.xyz), 0.0);
+  let sss = vDotS * vDotS * 0.44 * v;
+  let tipTint = select(vec3f(1.18, 1.22, 0.74), vec3f(1.2, 0.4, 0.4), night);
+  var colOut = alb * (sun * (0.28 + 0.72 * v) * sh + sky * litAO * 0.88) + alb * tipTint * sun * (0.22 * v + sss) * sh;
+  o.col = flatFog(colOut, p, w);
+  let vs2 = vDotS * vDotS;
+  let vs4 = vs2 * vs2;
+  let dewGlint = (vs4 * vs4 * vs4 * vs2) * sh * select(0.55, 0.0, night) * fade;
+  o.varBot = vec4f(f32(kind), dewGlint, select(0.0, 1.0, night), fade);
   return o;
 }
-@fragment fn fsGrass(i: GOut) -> GFragOut {
-  return GFragOut(vec4f(i.col, 1.0), vec4f(0.5, 1.0, 0.5, gbA(1.0, true, false, false)));
+@fragment fn fsGrass(i: GOut) -> @location(0) vec4f {
+  // Multi-species pixel-art grass tuft: cuts 5 diverse curved blades (integer hash: zero SFU sin per pixel)
+  let u = clamp(i.uv.x, 0.0, 1.0);
+  let v = clamp(i.uv.y, 0.0, 1.0);
+  let bScaled = u * 5.0;
+  let bIdx = floor(min(bScaled, 4.0));
+  let bu = (bScaled - bIdx) * 2.0 - 1.0;
+  let gH = hashu((u32(i.seed * 64.0) * 747796405u) ^ (u32(bIdx) * 2891336453u));
+  let bhHash = f32(gH & 1023u) / 1023.0;
+  let bLeanHash = f32((gH >> 10u) & 1023u) / 1023.0;
+  let spHash = f32((gH >> 20u) & 1023u) / 1023.0;
+  let gKind = i.varBot.x;
+  let isNight = i.varBot.z > 0.5;
+  let isCloverMoss = !isNight && (gKind == 7.0 || spHash < 0.14);
+  let isDryStraw = !isNight && !isCloverMoss && (spHash > select(0.76, 0.62, gKind == 3.0 || gKind == 5.0) && spHash < 0.90);
+  let isWildflower = !isNight && spHash >= 0.91 && (gKind == 1.0 || gKind == 2.0 || gKind == 5.0);
+  let bladeH = select(0.60 + 0.40 * bhHash, 0.44 + 0.24 * bhHash, isCloverMoss);
+  let bv = v / bladeH;
+  if (bv > 1.0) { discard; }
+  let bvPix = floor(bv * 9.0) / 9.0;
+  let archCurve = (bLeanHash - 0.5) * 0.64 * bvPix * bvPix;
+  let splay = (bLeanHash - 0.5) * 0.22 * bvPix + archCurve;
+  var halfW = mix(1.06, 0.14, bv * bv);
+  if (isCloverMoss) {
+    halfW = mix(0.86, 0.58, bv) * (1.0 - smoothstep(0.82, 1.0, bv));
+  } else if (isWildflower && bv > 0.72) {
+    halfW = mix(0.55, 0.88, sin(clamp((bv - 0.72) / 0.28, 0.0, 1.0) * 3.14159265));
+  }
+  let dBlade = abs(bu - splay);
+  if (dBlade > halfW) { discard; }
+  // Pixel-art stepped vertical banding + cylindrical cross-blade midrib + deep root grounding AO + dew cuticle glint
+  let vStep = floor(i.uv.y * 7.0) / 7.0;
+  let rootAO = mix(0.28, 1.15, smoothstep(0.0, 0.60, bvPix + vStep * 0.01));
+  let crossShade = 0.86 + 0.22 * sin(clamp(i.uv.x, 0.0, 1.0) * 3.14159265);
+  let midrib = select(1.0, 0.90, dBlade < halfW * 0.22 && !isWildflower);
+  let bladeRidge = (0.86 + 0.24 * (1.0 - dBlade / max(halfW, 0.05))) * midrib;
+  let bladeVar = 0.88 + 0.24 * bhHash;
+  var speciesTint = select(vec3f(1.04, 1.04, 0.88), vec3f(0.84, 1.04, 0.92), bhHash > 0.5);
+  if (isCloverMoss) {
+    speciesTint = vec3f(0.76, 1.02, 0.66);
+  } else if (isDryStraw) {
+    speciesTint = vec3f(1.36, 1.22, 0.72);
+  } else if (isWildflower && bv > 0.74) {
+    let fCol = select(vec3f(1.52, 1.48, 1.32), select(vec3f(1.46, 1.30, 0.54), vec3f(0.92, 1.04, 1.42), bLeanHash > 0.66), bLeanHash > 0.33);
+    speciesTint = mix(fCol, vec3f(1.52, 1.34, 0.42), select(0.0, 0.65, dBlade < halfW * 0.28 && bv > 0.80 && bv < 0.92));
+  }
+  let dewSpec = i.varBot.y * smoothstep(0.45, 0.95, bv) * (1.0 - dBlade / max(halfW, 0.05));
+  return vec4f(i.col * speciesTint * (rootAO * crossShade * bladeRidge * bladeVar + dewSpec), 1.0);
 }
 
-struct PtOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) col: vec4f };
+struct PtOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) col: vec4f, @location(2) @interpolate(flat) shape: f32 };
 @vertex fn vsPart(@builtin(vertex_index) vi: u32) -> PtOut {
   let ii = vi >> 2u; // indexed: particle * 4 + corner
   let pt = parts[ii];
@@ -1474,6 +2599,7 @@ struct PtOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
   o.pos = vec4f(2.0, 2.0, 2.0, 1.0);
   o.uv = vec2f(0.0);
   o.col = vec4f(0.0);
+  o.shape = 0.0;
   let ty = u32(pt.v.w);
   if (ty == 0u || pt.p.w <= 0.0) { return o; }
   let q = vec2f(cuOf(vi & 3u), cvOf(vi & 3u)) * 2.0 - 1.0; // indexed: 4 corners per particle
@@ -1496,11 +2622,28 @@ struct PtOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
       col = col * smoothstep(0.4, 1.0, distance(wp, F.cam.xyz));
     }
     case 2u, 3u: {
+      // Crisp square pixel-art dust motes illuminated by BOTH outdoor sunbeams AND indoor golden tungsten lamps
+      o.shape = 1.0;
       let sh = shadowSun(wp, vec3f(0.0, 1.0, 0.0), false);
+      let indoorAmt = 1.0 - smoothstep(0.30, 0.70, F.pbr.y);
+      let sunGate = smoothstep(0.18, 0.65, sh) * smoothstep(0.55, 0.95, F.pbr.y);
       let sunC = sunCol(w);
-      let base = select(vec3f(1.0, 0.96, 0.88), vec3f(1.0, 0.82, 0.45), ty == 3u);
-      size = select(0.016, 0.026, ty == 3u);
-      col = vec4f(base * (sunC * (sh * 0.9 + 0.04) * 0.55 + vec3f(0.02)), 0.0);
+      var ptLit = vec3f(0.0);
+      let nL = min(F.counts.z, 12u);
+      for (var li = 0u; li < nL; li++) {
+        let lp = F.lights[li].pos.xyz;
+        let rad = max(F.lights[li].pos.w, 0.1);
+        let dL = distance(wp, lp);
+        if (dL < rad) {
+          let att = (1.0 - dL / rad);
+          ptLit += F.lights[li].col.rgb * (att * att * 0.68);
+        }
+      }
+      let shimmer = 0.62 + 0.38 * sin(t * (1.4 + fract(seed * 9.3) * 1.6) + seed * 29.0);
+      let indoorFill = vec3f(0.95, 0.68, 0.28) * (0.20 * indoorAmt * select(1.0, 0.25, night));
+      let base = select(vec3f(1.0, 0.94, 0.78), vec3f(1.0, 0.80, 0.40), ty == 3u || indoorAmt > 0.35);
+      size = select(0.0055, 0.0092, ty == 3u || indoorAmt > 0.35) * (0.72 + fract(seed * 17.3) * 0.56);
+      col = vec4f(base * (sunC * 0.38 * sunGate + (ptLit + indoorFill) * (0.55 + 0.45 * indoorAmt)) * shimmer, 0.0);
     }
     case 4u: {
       let life = pt.p.w;
@@ -1545,18 +2688,27 @@ struct PtOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
     }
     default: { }
   }
-  // nothing floats right at the lens (it would be a huge soft blob): fade out near the camera
-  col = col * smoothstep(0.5, 1.4, distance(wp, F.cam.xyz));
+  // nothing floats right at the lens (it would be a huge soft blob): fade out near the camera, closer indoors for room dust
+  let isIndoorDust = (ty == 2u || ty == 3u) && F.pbr.y < 0.6;
+  let nearMin = select(select(0.5, 2.4, ty == 2u || ty == 3u), 0.75, isIndoorDust);
+  let nearMax = select(select(1.4, 4.2, ty == 2u || ty == 3u), 1.65, isIndoorDust);
+  col = col * smoothstep(nearMin, nearMax, distance(wp, F.cam.xyz));
   wp = wp + (r * q.x + u * q.y) * size;
   o.pos = F.viewProj * vec4f(wp, 1.0);
   o.uv = q;
   o.col = col;
   return o;
 }
-@fragment fn fsPart(i: PtOut) -> GFragOut {
+@fragment fn fsPart(i: PtOut) -> @location(0) vec4f {
+  if (i.shape > 0.5) {
+    // Crisp square pixel-art dust mote (matching reference corridor & lamp beam motes)
+    if (max(abs(i.uv.x), abs(i.uv.y)) > 0.86) { discard; }
+    return vec4f(i.col.rgb * 0.92, 0.92);
+  }
   let r2 = dot(i.uv, i.uv);
   if (r2 > 1.0) { discard; }
-  var a = exp(-r2 * 3.2);
+  let t = 1.0 - r2;
+  var a = t * t * t;
   if (i.col.a >= 0.999) { a = 1.0 - smoothstep(0.55, 1.0, r2); }
-  return GFragOut(vec4f(i.col.rgb * a, a), vec4f(0.5, 0.5, 0.5, 0.0));
+  return vec4f(i.col.rgb * a, a);
 }

@@ -41,7 +41,7 @@ struct RigPose {
   seatId: u32, // 0:none, 1:ground, 2:bench, 3:sofa
   slot: u32,
   models: vec4u, // x: torso, y: head, z: uarm, w: uarmL
-  models2: vec4u, // x: farm, y: farmL, z: leg
+  models2: vec4u, // x: farm, y: farmL, z: leg, w: body (unified skinned mesh)
   _pad: vec3u,
 };
 struct Particle { p: vec4f, v: vec4f, c: vec4f };

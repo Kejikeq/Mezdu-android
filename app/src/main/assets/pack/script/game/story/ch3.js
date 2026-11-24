@@ -5,23 +5,25 @@ import { m } from './common.js';
 export function setupChapter3(ctx) {
   const { G, adapt, addClue, gD, night, registerChapterExit, say } = ctx;
   const CH3_G = P.ch3Garage;
+  const ch3PlatY = 7.25;
   const ch3FloorY = 7.5;
-  const ch3DoorX = m(CH3_G.door + 1), ch3DoorZ = m(CH3_G.z0);
-  // Platform & Garage lights & props
-  G.place('lantern_post', m(674), gD(m(674), m(2132)), m(2132), 0, { mask: 3 });
-  G.light({ pos: [m(674), gD(m(674), m(2132)) + 2.2, m(2132)], r: 8, col: [1, 0.76, 0.44], k: 2.0, mask: 3 });
+  const ch3DoorX = m(CH3_G.door + 4), ch3DoorZ = m(CH3_G.z0);
+  // Platform & Garage lights & props (platform floor top surface is y = 58 * 0.125 = 7.25m)
+  G.place('lantern_post', m(674), ch3PlatY, m(2126), 0, { mask: 3 });
+  G.light({ pos: [m(674), ch3PlatY + 2.2, m(2126)], r: 8, col: [1, 0.76, 0.44], k: 2.0, mask: 3 });
   G.light({ pos: [m(680), 9.2, m(2184)], r: 9, col: [0.95, 0.75, 0.45], k: 2.2, mask: 3 });
-  G.place('bench', m(684), gD(m(684), m(2132)), m(2132), -Math.PI / 2, { mask: 3 });
-  const ch3KeyProp = G.place('item_car_key', m(673), gD(m(673), m(2135)) + 0.55, m(2135), 0.4, { mask: 3, scale: 2.5, highlight: true });
-  const ch3TicketProp = G.place('item_bear_note', m(684), gD(m(684), m(2132)) + 0.55, m(2132), 0.2, { mask: 3, scale: 2.0, highlight: true });
+  G.place('drawers', m(668), ch3PlatY, m(2134), Math.PI / 2, { mask: 3 });
+  const ch3KeyProp = G.place('item_car_key', m(668), ch3PlatY + 0.88, m(2134), 0.4, { mask: 3, scale: 2.5, highlight: true });
+  G.place('bench', m(688), ch3PlatY, m(2132), -Math.PI / 2, { mask: 3 });
+  const ch3TicketProp = G.place('item_bear_note', m(688), ch3PlatY + 0.46, m(2132), 0.2, { mask: 3, scale: 2.0, highlight: true });
   G.place('workbench', m(680), ch3FloorY, m(2188), 0, { mask: 3 });
-  const ch3WrenchProp = G.place('tool_crowbar', m(684.5), ch3FloorY + 0.1, m(2185), 0.5, { mask: 3, scale: 1.2 });
+  const ch3WrenchProp = G.place('tool_crowbar', m(682.5), ch3FloorY + 0.86, m(2188), 0.5, { mask: 3, scale: 1.2 });
   const ch3DoorOpenProp = G.place('door_open', ch3DoorX - 0.5, ch3FloorY, ch3DoorZ - 0.25, Math.PI / 2, { mask: 3, visible: false });
 
   // Mandatory 3A: Spare garage key at the train platform
   G.interact({
-    pos: [m(673), gD(m(673), m(2135)) + 0.8, m(2135)], r: 2.4, world: 'any',
-    label: 'Железный ящик у перрона: достать запасной ключ от гаража',
+    pos: [m(668), ch3PlatY + 0.88, m(2134)], r: 2.4, world: 'any',
+    label: 'Железный шкафчик на перроне: достать запасной ключ от гаража',
     icon: 'key', prop: ch3KeyProp,
     cond: () => G.chapter === 3 && !G.has('garage_key'),
     run: async () => {
@@ -36,7 +38,7 @@ export function setupChapter3(ctx) {
 
   // Optional 3B: Unused train ticket on platform bench
   G.interact({
-    pos: [m(684), gD(m(684), m(2132)) + 0.7, m(2132)], r: 2.2, world: 'any',
+    pos: [m(688), ch3PlatY + 0.6, m(2132)], r: 2.2, world: 'any',
     label: 'Скамья перрона: взять неиспользованный ж/д билет (опц.)',
     icon: 'hand', prop: ch3TicketProp,
     cond: () => G.chapter === 3 && !G.has('train_ticket'),

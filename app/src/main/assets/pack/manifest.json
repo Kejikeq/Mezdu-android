@@ -13,9 +13,9 @@
   "focal": 408,
   "floats": 416
  },
- "version": "v2.0.0",
- "commit": "1bd36d44c3eae7164a0fb9f1e0590bed25c7bd1f",
- "created": "2026-11-15T21:32:25.395Z",
+ "version": "v3.3.0",
+ "commit": "41fc9dc4716a20a5308281528b4c854ed00bec66",
+ "created": "2026-11-24T17:34:45.071Z",
  "constants": {
   "VS": 0.125,
   "WX": 1536,
@@ -26,9 +26,9 @@
   "SEED": 20261105,
   "TILE": 64,
   "ATLAS_W": 768,
-  "ATLAS_H": 6144,
+  "ATLAS_H": 7168,
   "ATLAS_MIPS": 5,
-  "MAX_MAT": 96,
+  "MAX_MAT": 112,
   "WORLD_TILE": 256,
   "flags": {
    "SOLID": 1,
@@ -42,214 +42,193 @@
   }
  },
  "nightExposure": {
-  "1": 1.4,
-  "2": 1.4,
-  "3": 1.4,
-  "4": 1.4,
-  "5": 1.4,
-  "6": 1.4,
-  "7": 1.4,
-  "8": 1.4,
-  "9": 1.4,
-  "10": 1.4
+  "1": 1.38,
+  "2": 1.38,
+  "3": 1.38,
+  "4": 1.38,
+  "5": 1.38,
+  "6": 1.38,
+  "7": 1.38,
+  "8": 1.38,
+  "9": 1.38,
+  "10": 1.38
  },
  "files": [
   {
-   "path": "shaders/ao.wgsl",
-   "sha256": "202e6068d8c2927930280dcf70ffaaeb58b53f009623270c0b3eaa179fac4a33",
-   "size": 6109,
-   "kind": "shader",
-   "name": "AO_SHADER"
-  },
-  {
    "path": "shaders/bug.wgsl",
-   "sha256": "7da8271889e5d729a588e2112b8f44018e08ae4a9c3a703d70a9e41c90e94da9",
-   "size": 6787,
+   "sha256": "cd4b5c54a39047f170a1ce75ee9ce0fc04845ed28691429a5fcf29d06ace638f",
+   "size": 6819,
    "kind": "shader",
    "name": "BUG_SHADER"
   },
   {
    "path": "shaders/comp.wgsl",
-   "sha256": "4fe7cf762bf1eb90bf88c862f44ea9add91f65743f5981f92532da4dc1d20bd6",
-   "size": 23896,
+   "sha256": "5234e65be6d21c630741725675ccb298db3daf75ddf6be9392c4e1966621cc95",
+   "size": 27611,
    "kind": "shader",
    "name": "COMP_SHADER"
   },
   {
    "path": "shaders/cull.wgsl",
-   "sha256": "0f60555f14bee76fb19ff10f5833947d9b3e1e6e76751180bfe76eeb2b076b3f",
-   "size": 7149,
+   "sha256": "fed31773ca73fcec6117f44c0a0a5d999c399c99291593b2aa7632799d500b90",
+   "size": 7412,
    "kind": "shader",
    "name": "CULL_SHADER"
   },
   {
    "path": "shaders/env.wgsl",
-   "sha256": "0954b9e94573c75151119bbcf735c31ffc3115dc8ed84c457fb64ce8419d2706",
-   "size": 5879,
+   "sha256": "9bae57a48f5684cdaea2533bf9a90de7c42bde2ff61ea6bd8a140f80a3baced3",
+   "size": 5911,
    "kind": "shader",
    "name": "ENV_SHADER"
   },
   {
    "path": "shaders/exposure.wgsl",
-   "sha256": "e3d82a92f7de7de7934c60eb907ed28e640ff7c6bf54ee3e4c539bf1e88e113b",
-   "size": 1569,
+   "sha256": "2c25303bfa191fefb1710e82443441fe6f5b0271167328b82c3f113a124f54c1",
+   "size": 2030,
    "kind": "shader",
    "name": "EXPOSURE_SHADER"
   },
   {
+   "path": "shaders/hair.wgsl",
+   "sha256": "5d0650a27ed5073d7c8e8be404d64d0ab8590acf28804c4620b51efc03bf4d33",
+   "size": 28650,
+   "kind": "shader",
+   "name": "HAIR_SHADER"
+  },
+  {
    "path": "shaders/preview.wgsl",
-   "sha256": "8f248b225477d6d2a9aa61cc84952dd01a99be3e4a48044ae3c4bd2181e6e22b",
-   "size": 3462,
+   "sha256": "aedc1f30ae85c1fe0aa25cf7737a89f72caf35d5a52f1308ffdc42f89310f1b4",
+   "size": 5028,
    "kind": "shader",
    "name": "PREVIEW_SHADER"
   },
   {
    "path": "shaders/rig.wgsl",
-   "sha256": "2d93f708db6989f0dc5c8b49b7cf7841b12f1699b5f9e4bb2ea25c760ebf764e",
-   "size": 11381,
+   "sha256": "306ffe8b63ec14d98a5a11363d884335e4f71d96cc755b4c338dbe419a52496a",
+   "size": 16319,
    "kind": "shader",
    "name": "RIG_SHADER"
   },
   {
    "path": "shaders/sim.wgsl",
-   "sha256": "9b494dd4e7a74885a70e635bc972b5fb3017e1755b9a85237cc1f6c31407c0d5",
-   "size": 7733,
+   "sha256": "4c67362622026d42926e1c47f5f7f32c121b1f2bb53bec1425b46a256a7040f2",
+   "size": 7765,
    "kind": "shader",
    "name": "SIM_SHADER"
   },
   {
-   "path": "shaders/ssr.wgsl",
-   "sha256": "92d630d42ba98b7ef0f7583d254add8d2d5604c3ecc4ef4fee5c01800d37e79e",
-   "size": 6109,
-   "kind": "shader",
-   "name": "SSR_SHADER"
-  },
-  {
-   "path": "shaders/taa.wgsl",
-   "sha256": "57963341ee7758fef9c1df993c6f0f4bc550e45352cc8d0f8a4fa96843221d05",
-   "size": 4365,
-   "kind": "shader",
-   "name": "TAA_SHADER"
-  },
-  {
-   "path": "shaders/vol.wgsl",
-   "sha256": "e6e43450e8acf08b0b71f77180fdc1117067a3db179596b58d31f4b885ee1f11",
-   "size": 8209,
-   "kind": "shader",
-   "name": "VOL_SHADER"
-  },
-  {
    "path": "shaders/voxel_cull.wgsl",
-   "sha256": "fa48469a4a42b52d82b08e203fd3b231f9b091873a1be6994398393fbcafa4fb",
-   "size": 5331,
+   "sha256": "08959ca36186c819ed6aca9bec188703a536151c2e1b17113812186951e3df1a",
+   "size": 5363,
    "kind": "shader",
    "name": "VOXEL_CULL_SHADER"
   },
   {
    "path": "shaders/world.wgsl",
-   "sha256": "198f8c9b363e2e857ed418ad1c00a362b9575f88872c7de902b415da4d867651",
-   "size": 76569,
+   "sha256": "c59d18199614cd44c644864e976674809ad5103e36d8dedb94b5af039605daaa",
+   "size": 145567,
    "kind": "shader",
    "name": "WORLD_SHADER"
   },
   {
    "path": "atlas/det_L0.bin.zst",
-   "sha256": "d65c0dccc65d2ba9b2c261ab250126bf1c9e4e48912d36ff0a5516a1a2fb9045",
-   "size": 1058924,
+   "sha256": "e07741f0b09cd4ad1e65f312332df0b7bfa330903e189af4bfbc74bb4c5fa110",
+   "size": 2624181,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 768,
-   "height": 6144,
+   "height": 7168,
    "mip": 0
   },
   {
    "path": "atlas/det_L1.bin.zst",
-   "sha256": "8bfb8e3200d6cc5ab1bd5086609af036b19ca37dd8887e14dbea9f3cb683ac59",
-   "size": 542710,
+   "sha256": "087f10d5bb58a40ddecad25cff3afdcee0f556b7f5c6a864cfcbab73215df578",
+   "size": 1090210,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 384,
-   "height": 3072,
+   "height": 3584,
    "mip": 1
   },
   {
    "path": "atlas/det_L2.bin.zst",
-   "sha256": "4197be13a404898114fd21ba6dba86b2349926171e05c975ef88faac0e7b832d",
-   "size": 312682,
+   "sha256": "6f497b8eecc397a0c5bde90d33539478165e5a56ead46238b4289aef096a664d",
+   "size": 409974,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 192,
-   "height": 1536,
+   "height": 1792,
    "mip": 2
   },
   {
    "path": "atlas/det_L3.bin.zst",
-   "sha256": "2ef0e4a9a14406fbe0fb7c162ae4113acd04f78955ee0224de16b1f386dcb018",
-   "size": 101580,
+   "sha256": "b38b1c8a1b10088a874c2a841a71b54c29f1988646bf71bd5c629aeb66457866",
+   "size": 124858,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 96,
-   "height": 768,
+   "height": 896,
    "mip": 3
   },
   {
    "path": "atlas/det_L4.bin.zst",
-   "sha256": "c7fe2381eb04f734aad22f528974427e3fe6876e42fd004d853a849577538774",
-   "size": 26550,
+   "sha256": "31ed0318d693c3e7a872cf9ca7683576a5f35ab4fd59750cdc0f86e30cab5d94",
+   "size": 32149,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 48,
-   "height": 384,
+   "height": 448,
    "mip": 4
   },
   {
    "path": "atlas/pbr_L0.bin.zst",
-   "sha256": "ca6227e2089407b2dc3b7481e1ed5744adac7a81c9663bb1061ccf302f40557e",
-   "size": 409968,
+   "sha256": "a5dcd013aebf22cb793d708ffa8ee8462449c5ea4aa9a8c747182356eaf0fbf1",
+   "size": 700798,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 768,
-   "height": 6144,
+   "height": 7168,
    "mip": 0
   },
   {
    "path": "atlas/pbr_L1.bin.zst",
-   "sha256": "a94bda3d68f371c785d75f4626ab1d3848e4d4e2739d069ae3fc5687c2c2b805",
-   "size": 335100,
+   "sha256": "ac5e7b2ae7e292de1d1ea08724354c5c269466cf8570267477ca7950daa97212",
+   "size": 467968,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 384,
-   "height": 3072,
+   "height": 3584,
    "mip": 1
   },
   {
    "path": "atlas/pbr_L2.bin.zst",
-   "sha256": "5db0b9e63bb5b377df7afeec8d39b32a9d0f5df42f271256f8d2bdf404718484",
-   "size": 221568,
+   "sha256": "1c41a9232bf0790546af68343731fbd3ee75c5620378e5f54a1170c6bf0a7b63",
+   "size": 280695,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 192,
-   "height": 1536,
+   "height": 1792,
    "mip": 2
   },
   {
    "path": "atlas/pbr_L3.bin.zst",
-   "sha256": "e4541de8cfc4e40471b197f1b434a058e30e5a4d5f0231a26bd4e1fc68b5cb97",
-   "size": 70255,
+   "sha256": "8635f961fcb313f447a3057eba93d0b9ff4a60282e14e3a583260c7635f8af18",
+   "size": 91578,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 96,
-   "height": 768,
+   "height": 896,
    "mip": 3
   },
   {
    "path": "atlas/pbr_L4.bin.zst",
-   "sha256": "96f705c51a79912adc88026ee16cd707ecf3cc68dd33dddbf63cbf56261aaadf",
-   "size": 19500,
+   "sha256": "781d5deb5adfab4d42a3b692dd59f95392f92a8d85339adf8b5514ddb35e92b5",
+   "size": 24570,
    "kind": "atlas",
    "format": "rgba8unorm",
    "width": 48,
-   "height": 384,
+   "height": 448,
    "mip": 4
   },
   {
@@ -263,7 +242,7 @@
   },
   {
    "path": "tex/lut.bin",
-   "sha256": "7918b265cd96889306c111e8bac2b9bd2d8fe2f8900d78fc33198c4997c796c8",
+   "sha256": "c3ec246132adbeac50246d54fad0624f0da5405f8106939e94ea9249c901b2e9",
    "size": 16384,
    "kind": "tex",
    "note": "bakeColorLUT(16)",
@@ -272,142 +251,142 @@
   },
   {
    "path": "materials.bin",
-   "sha256": "07eafebf8d7e553ba6cdcef43d6ab20b5bcc36b971824dbfe071b1999c662323",
+   "sha256": "4aeaccc845fea7ec4f73b20e134d19c4bd3077686968ae7865341df28bde0d90",
    "size": 8192,
    "kind": "materials",
    "layout": "256 x [r,g,b (linear), flags|metal4<<8|porosity4<<12, emit, vary, roughness, pattern] f32"
   },
   {
    "path": "materials.json",
-   "sha256": "cb004f019cf547d43b280895a28d98ea354f50b5c4c715aab0ff8398d1df880d",
-   "size": 8179,
+   "sha256": "cd08daef4f2aa7325ad2c187d1b698d68df55e2290751f036e028a5689ac0d84",
+   "size": 9152,
    "kind": "materials"
   },
   {
    "path": "world/0_8.bin.zst",
-   "sha256": "8c2a8f51c708d597b740977177ec9aa3173db15aba094afe76dc402c5d9d5389",
-   "size": 95666,
+   "sha256": "3b7ae7325d6ccb6ed069db9e43a930336cba468ded7caa71e78a91ca22974df3",
+   "size": 114619,
    "kind": "world",
    "tx": 0,
    "tz": 8
   },
   {
    "path": "world/1_8.bin.zst",
-   "sha256": "4684edbae732abe8bc857b8f083b4131b35ac85efb9b58f99d1577d1fa40635d",
-   "size": 45953,
+   "sha256": "fb4c621c44dc548cfa3007eb95ed9b42c0f2dd70ea2b06004015f0d83b8cafb1",
+   "size": 54119,
    "kind": "world",
    "tx": 1,
    "tz": 8
   },
   {
    "path": "world/2_8.bin.zst",
-   "sha256": "02b5e65e5e0d6fbeedfb5c0af0bb553579a2d565f23bcbd6bad2b47f36957227",
-   "size": 43889,
+   "sha256": "fc069b28fd3db76bc2c528c6be618a3332971fb7981f329bacd642ef9b7ac89a",
+   "size": 55430,
    "kind": "world",
    "tx": 2,
    "tz": 8
   },
   {
    "path": "world/0_9.bin.zst",
-   "sha256": "cf181ec7034f00d6c3d3ac138e97f6893eaa0b95a24a140e4271c06d0b7b754f",
-   "size": 102069,
+   "sha256": "10051205133662476ec46bbc21990611bdcacaa1401a300570e148a2afbbbdc1",
+   "size": 131586,
    "kind": "world",
    "tx": 0,
    "tz": 9
   },
   {
    "path": "world/1_9.bin.zst",
-   "sha256": "778eac904fbdfcf2ca8b13ba6d9dc93338072c718b77c0a0269dd4c7e300d49d",
-   "size": 79674,
+   "sha256": "422dce36e28f234df2d3e1be680a237c87fa82b700f5b521d8886b23200671a1",
+   "size": 77272,
    "kind": "world",
    "tx": 1,
    "tz": 9
   },
   {
    "path": "world/2_9.bin.zst",
-   "sha256": "8eb636cf16cd8f25dbb58bd0ad1e7efa53876080328ecd14bb6d848150e87a9f",
-   "size": 70826,
+   "sha256": "04f9164f8a1d45e95873d2c9a7c1597104f2eab2122d91b911471c2b8b33c15d",
+   "size": 78227,
    "kind": "world",
    "tx": 2,
    "tz": 9
   },
   {
    "path": "mesh/0_8.bin.zst",
-   "sha256": "926b54ca5447dff258c432d6380ad2e9b148a74102312a461af0a769efc6c69b",
-   "size": 132750,
+   "sha256": "8c32af5773bff20fff44bdcbb936e3bc095dbd01ddb1ee103f77f662c690294a",
+   "size": 142717,
    "kind": "mesh",
    "tx": 0,
    "tz": 8
   },
   {
    "path": "mesh/1_8.bin.zst",
-   "sha256": "a7c882978c2f9aa61d8aefc090afc3ec683b3daaf6b7f27a79b412b1ef8312b1",
-   "size": 128992,
+   "sha256": "168b25027b3d2c6559c31ebb3244fcabf682d978953fe81bbd2a17defa740d39",
+   "size": 156106,
    "kind": "mesh",
    "tx": 1,
    "tz": 8
   },
   {
    "path": "mesh/2_8.bin.zst",
-   "sha256": "61c797b5185a3532a981c648c1bffe7aff9dc1588be78f5159befcad0a59b3f0",
-   "size": 73594,
+   "sha256": "c537e12b8dbf7705e20d0ff98064bd752e1668be9cc9fc303bfaf40608594e4b",
+   "size": 107026,
    "kind": "mesh",
    "tx": 2,
    "tz": 8
   },
   {
    "path": "mesh/0_9.bin.zst",
-   "sha256": "c1dfc53dfbbb09b53719285f1429f16205b441e9a52ba9cbf4e14613c5716b46",
-   "size": 114313,
+   "sha256": "d0fb73f385eb757dbeb67b9a817aadb477b5ebee39ef813ad24eac53027efff2",
+   "size": 145908,
    "kind": "mesh",
    "tx": 0,
    "tz": 9
   },
   {
    "path": "mesh/1_9.bin.zst",
-   "sha256": "4a3d838e3e0e2bac704883a54839ffa71265c88eadebe1006eb105d7746f9853",
-   "size": 91338,
+   "sha256": "df491f77164d85eba3e3642997e404bfd9cbeb2caff2530c7181bb7e06115fd5",
+   "size": 90905,
    "kind": "mesh",
    "tx": 1,
    "tz": 9
   },
   {
    "path": "mesh/2_9.bin.zst",
-   "sha256": "ef2ea94c046bd092b515f330c1b9d95a25033490b63e54ed33f92ea6292602e5",
-   "size": 105363,
+   "sha256": "d41c83e09aa162ef80973e2a57ac01a4c4053c48d5b042b9e8ffea4ef8716bfb",
+   "size": 108747,
    "kind": "mesh",
    "tx": 2,
    "tz": 9
   },
   {
    "path": "models/faces.bin.zst",
-   "sha256": "26810590c207ec16dbf3ada002697bbe724f44c0d33d917a448343b9466c58d1",
-   "size": 2616047,
+   "sha256": "996ab6b1224e3c707bab74acb5f7ecb3f264c80551eb4425f08a19b690ea86fc",
+   "size": 1285050,
    "kind": "models"
   },
   {
    "path": "models/models.json",
-   "sha256": "f25023401b7d1ad32e58e4ca8d3b9c92cc251a896f9ac4063089ab3e3721a9f2",
-   "size": 63232,
+   "sha256": "366d514d44f7e2e01dbcd428cd29fcf565f34dd81319c1c51162ad95ee1e7322",
+   "size": 51688,
    "kind": "models"
   },
   {
    "path": "models/instances.bin.zst",
-   "sha256": "8be9630d9c04b6a5d976e7f518ea0a14ab5d40898ede4e36cf2533d169d3de6d",
-   "size": 62834,
+   "sha256": "65df148c716d85fb74d463767a639c73b2be69ad7cfe873cd9cf4e33e7a68878",
+   "size": 45062,
    "kind": "models",
-   "count": 4550
+   "count": 1924
   },
   {
    "path": "grass.bin.zst",
-   "sha256": "6b3fb7f639020a27682afcedf340cae3f25948ce105dcf8dea73a8fa25885055",
-   "size": 533423,
+   "sha256": "16ec992c13b4bf2ddf31552a89b4bd55db530d22d0709580d11dce3238afe7fb",
+   "size": 489584,
    "kind": "grass",
    "words": 1228800
   },
   {
    "path": "frame/ch1.bin",
-   "sha256": "15daa53d0f772ada69e73f23255f04caea946c62d6fb6f02904a8a292dd5d0e9",
+   "sha256": "6314d495dfe6b38ec689783eb65af72b7f886a1efb623355a1a97c535dd43004",
    "size": 1664,
    "kind": "frame",
    "chapter": 1,
@@ -415,7 +394,7 @@
   },
   {
    "path": "frame/ch2.bin",
-   "sha256": "f27c7a39b334728857ca7663be0596294a0440b11b37c2a937c8a788a702ecc1",
+   "sha256": "5b7b2cbfbff3af54d0d4a33a478889b0fb9af133a24c1dade7d48a915191111d",
    "size": 1664,
    "kind": "frame",
    "chapter": 2,
@@ -423,7 +402,7 @@
   },
   {
    "path": "frame/ch3.bin",
-   "sha256": "f27c7a39b334728857ca7663be0596294a0440b11b37c2a937c8a788a702ecc1",
+   "sha256": "5b7b2cbfbff3af54d0d4a33a478889b0fb9af133a24c1dade7d48a915191111d",
    "size": 1664,
    "kind": "frame",
    "chapter": 3,
@@ -431,7 +410,7 @@
   },
   {
    "path": "frame/ch4.bin",
-   "sha256": "2dabf29f19ae5afd58a46ee0ff8d38caba9c15d739e14ad96733bf71690025a0",
+   "sha256": "d0d200aa05fcb00bb75f326e086b54f41800d0c5886529876d47e72fffc3ef0b",
    "size": 1664,
    "kind": "frame",
    "chapter": 4,
@@ -439,7 +418,7 @@
   },
   {
    "path": "frame/ch5.bin",
-   "sha256": "c11bfd423a8341b7b76e517c7052281a52ee52144df6fe380949995205465c01",
+   "sha256": "7f3a211a270c6a4079664481699be2eb00d2d619a57783cee9197b267d48acb0",
    "size": 1664,
    "kind": "frame",
    "chapter": 5,
@@ -447,7 +426,7 @@
   },
   {
    "path": "frame/ch6.bin",
-   "sha256": "15daa53d0f772ada69e73f23255f04caea946c62d6fb6f02904a8a292dd5d0e9",
+   "sha256": "6314d495dfe6b38ec689783eb65af72b7f886a1efb623355a1a97c535dd43004",
    "size": 1664,
    "kind": "frame",
    "chapter": 6,
@@ -455,7 +434,7 @@
   },
   {
    "path": "frame/ch7.bin",
-   "sha256": "f27c7a39b334728857ca7663be0596294a0440b11b37c2a937c8a788a702ecc1",
+   "sha256": "5b7b2cbfbff3af54d0d4a33a478889b0fb9af133a24c1dade7d48a915191111d",
    "size": 1664,
    "kind": "frame",
    "chapter": 7,
@@ -463,7 +442,7 @@
   },
   {
    "path": "frame/ch8.bin",
-   "sha256": "4999b6663705a13590eca3e546e615556ff867065c2190b580774def6798af74",
+   "sha256": "2816ef40481292405790be5711a358572017ec7ca80f4e9c832bf28a9150eba1",
    "size": 1664,
    "kind": "frame",
    "chapter": 8,
@@ -471,7 +450,7 @@
   },
   {
    "path": "frame/ch9.bin",
-   "sha256": "9f0263b32f008096aa43d2b9605417ebcbcde53e210977c3d656d8bb2a64fe13",
+   "sha256": "306e2d3cb886ae71843dee1f608f4a8f7028b193988c691ea6da994acce7b41d",
    "size": 1664,
    "kind": "frame",
    "chapter": 9,
@@ -479,7 +458,7 @@
   },
   {
    "path": "frame/ch10.bin",
-   "sha256": "c11bfd423a8341b7b76e517c7052281a52ee52144df6fe380949995205465c01",
+   "sha256": "7f3a211a270c6a4079664481699be2eb00d2d619a57783cee9197b267d48acb0",
    "size": 1664,
    "kind": "frame",
    "chapter": 10,
@@ -487,15 +466,15 @@
   },
   {
    "path": "edit/ch1Door.vox.zst",
-   "sha256": "74c8780e5132fbdff2fc791466ca63d34a387cc7eb81314e258f3f43cb5c9fb6",
+   "sha256": "eb78b699c3a4d763bb476d9f885c522baf443ea8f23c433195b0f8a92d660bf0",
    "size": 80,
    "kind": "edit",
    "name": "ch1Door"
   },
   {
    "path": "edit/ch1Door.mesh.zst",
-   "sha256": "42d08fd3e55d28999d29f2b43a20321f17d997eab06be9bb9267d32f09f5a12e",
-   "size": 18160,
+   "sha256": "45318429a17c314d06f09c14ab79f1c37bbf2d47af909e4bbb5cafd0218940f4",
+   "size": 19298,
    "kind": "edit",
    "name": "ch1Door"
   },
@@ -508,8 +487,8 @@
   },
   {
    "path": "edit/ch2Door.mesh.zst",
-   "sha256": "581a49ff35d7cab69ed1403cbad5126b9b9fe3a4388f52ef0d938bd54437706c",
-   "size": 5047,
+   "sha256": "3e51bbd1e6937164a00a3ae0228b2498cdfddafb4e7b385cd513072ee15d02ee",
+   "size": 5040,
    "kind": "edit",
    "name": "ch2Door"
   },
@@ -522,8 +501,8 @@
   },
   {
    "path": "edit/ch3Door.mesh.zst",
-   "sha256": "7df008309748bacc08bea3526460e97a87b1cc8e2c2824cf6881b78b15d5ea21",
-   "size": 8258,
+   "sha256": "88fc2d43de2238315e16d8af763972562c9f5fc6850064b6556eb00a6d921c9e",
+   "size": 9587,
    "kind": "edit",
    "name": "ch3Door"
   },
@@ -536,78 +515,78 @@
   },
   {
    "path": "edit/ch4Door.mesh.zst",
-   "sha256": "52a95aa8749db28ab5919f07f6a9dad20fb2bc8c36eadaabb9fd0d16665cfd98",
-   "size": 6794,
+   "sha256": "79e00d11691cb2cc03342dcba8769e41bfa6a1a6d3f661e74151d0ff4010b302",
+   "size": 7715,
    "kind": "edit",
    "name": "ch4Door"
   },
   {
    "path": "edit/startCave.vox.zst",
-   "sha256": "99849b73428aa1c9fa4a8de16fae841f75b17979d60105c2b62682b267b5dfe5",
-   "size": 932,
+   "sha256": "dbda941ba923b89f0e1ac137c0adbdd40c158dac42fc4ea8a3bb12a747438484",
+   "size": 928,
    "kind": "edit",
    "name": "startCave"
   },
   {
    "path": "edit/startCave.mesh.zst",
-   "sha256": "912b00bb9217dd69be4843d9f335865294cae762a1c6b5e2a06573d2a44bfd3e",
-   "size": 10906,
+   "sha256": "a542f0c368bdac6b8e9369b1b02fb17fe0d0f8dbc59072d40cc10d4d68eb9594",
+   "size": 10299,
    "kind": "edit",
    "name": "startCave"
   },
   {
    "path": "edit/bridge1.vox.zst",
-   "sha256": "e41a4ed0014e7215fed05f542f3afbc675ec93e2c89d268a5de40cc0ae956a87",
-   "size": 102,
+   "sha256": "924f5254e02a5ef4c790624ad12ce5c883467f050aa817c1a15d4c12ba8685b9",
+   "size": 115,
    "kind": "edit",
    "name": "bridge1"
   },
   {
    "path": "edit/bridge1.mesh.zst",
-   "sha256": "3fb3e6d0d03327891cd86ffc9679f864dc247415016a206ebeff988eabd22a00",
-   "size": 15716,
+   "sha256": "8a315642bebb2db772801e0fcc5042252bed184670d34c4e37188e72884f4eca",
+   "size": 14528,
    "kind": "edit",
    "name": "bridge1"
   },
   {
    "path": "edit/door.vox.zst",
-   "sha256": "357867b5fb6ffa924240b6dad73ae2e76b57b63a3e896341a674aef66f8bfe63",
-   "size": 100,
+   "sha256": "29fe75fdbf747920d0cebd3bfeb5a49930176342ed1f80ecfe7b89304c1e461e",
+   "size": 91,
    "kind": "edit",
    "name": "door"
   },
   {
    "path": "edit/door.mesh.zst",
-   "sha256": "8f5ba9a0a0fa28c2d794776095a3a384e4c1b9e4bb4731420ffb18a72900d517",
-   "size": 5886,
+   "sha256": "3f1569dfd3a0fc3fc7af6ae27212d844290a4927a9f817cf26a15a8bfeeeb1e9",
+   "size": 6889,
    "kind": "edit",
    "name": "door"
   },
   {
    "path": "edit/hearth.vox.zst",
-   "sha256": "6cbbcceb87609dc29d20d00f0dd0b585daa816762c7fd9402945873b2eba6cdc",
-   "size": 500,
+   "sha256": "46b5a024b8127b089752ffc1c704dddcee797464c1ccfc617420a959dd732983",
+   "size": 460,
    "kind": "edit",
    "name": "hearth"
   },
   {
    "path": "edit/hearth.mesh.zst",
-   "sha256": "bc615f1353862deef28dd7ab55bbb610d9105e285bf14ccc34a5da81dc072525",
-   "size": 17603,
+   "sha256": "c909ba775ef07a54fbc2ea9ed8288d8618ff6dd3f2eff74193bf312b0cc96eab",
+   "size": 18660,
    "kind": "edit",
    "name": "hearth"
   },
   {
    "path": "edit/grate.vox.zst",
-   "sha256": "57d22fe06aa74cb66194e9b21a14cfd2ec888c59045e78922c0e889e21263e7d",
-   "size": 465,
+   "sha256": "531c3ad89dbc54334f3f715b55d73823ccc746148f04cdf9b0eeb9d1114374a0",
+   "size": 469,
    "kind": "edit",
    "name": "grate"
   },
   {
    "path": "edit/grate.mesh.zst",
-   "sha256": "ded5a0df412905c78c0a010979b7803a5175af4065dc65305717d8ccaf2b5a5f",
-   "size": 10726,
+   "sha256": "efb41705cf9429efb8dc2aff8edf946a5f0ada927d06276f14e18c173a86fd02",
+   "size": 10769,
    "kind": "edit",
    "name": "grate"
   },
@@ -620,15 +599,15 @@
   },
   {
    "path": "edit/tunnelWall.mesh.zst",
-   "sha256": "bfbe15d427e7cc12222399cd0412244de5ffff9d2e3aead58cd8dd953e5631a7",
-   "size": 29268,
+   "sha256": "c4db2434bd25f49edfe126056462b2b3bd2dffb9e2ec958879a09d289cabc128",
+   "size": 29706,
    "kind": "edit",
    "name": "tunnelWall"
   },
   {
    "path": "script/engine/math.js",
-   "sha256": "d4affa59466b119f649d67cdf9419f9873b9536ec98e6d735141f11b6719929c",
-   "size": 8175,
+   "sha256": "c5509a94e20fdf45a2d2a8fc6bd0b882a68f53b7414dd1e92ed02dc7930c4cf2",
+   "size": 9248,
    "kind": "script",
    "entry": false
   },
@@ -648,8 +627,8 @@
   },
   {
    "path": "script/game/duality.js",
-   "sha256": "0e0de211d90c8b19813fce9c39f5581a75a7a380a677eb9ffc843acf496a24f6",
-   "size": 9166,
+   "sha256": "e9a41756bb109f48b5d8e0bdbd752d2262f99f20b128b55d9bd61150dc0b373c",
+   "size": 8981,
    "kind": "script",
    "entry": true
   },
@@ -676,15 +655,15 @@
   },
   {
    "path": "script/game/story.js",
-   "sha256": "4214886782ebb6376e0628a9ca549865604f0617f901a7d1a21adcd44975eac5",
-   "size": 11640,
+   "sha256": "c7e21c9b456c970e745bff3fbaf56edd1685c371269c89a2f1f0f4aa43174e9b",
+   "size": 11835,
    "kind": "script",
    "entry": true
   },
   {
    "path": "script/game/story/ch1.js",
-   "sha256": "7038186ab26184d72492c8456bdb106bf11260e997a2023dcd313df598283fee",
-   "size": 61949,
+   "sha256": "eec432b6e000e113bc630f78988969fcbe467ecb0e3f07beacb4a2276f428579",
+   "size": 74407,
    "kind": "script",
    "entry": false
   },
@@ -697,22 +676,22 @@
   },
   {
    "path": "script/game/story/ch2.js",
-   "sha256": "1150c226befd7cce5c9250e3ddd142b0d3d84a1568e3b5e222b8514a51b68445",
-   "size": 7580,
+   "sha256": "ddd0eb2cbfb059f1777131b9d5f86efe1036f5daa6786e83fb46b3bde904b37e",
+   "size": 7602,
    "kind": "script",
    "entry": false
   },
   {
    "path": "script/game/story/ch3.js",
-   "sha256": "9487e84468378bf17d2623e4d8b0a207e71c109943fd1a42b4e9e9bd305c596f",
-   "size": 7111,
+   "sha256": "a427824c973cdacaef9b6c7076282d89a9c7e459559e7449ac0f20d82037e4ba",
+   "size": 7199,
    "kind": "script",
    "entry": false
   },
   {
    "path": "script/game/story/ch4.js",
-   "sha256": "c2c23f2165f5685c70992fb51280f0ffe5e9b8321b1e8baf2c2f50eb8771484d",
-   "size": 6968,
+   "sha256": "604c50a56b00afc1c0856d91683ee02307ed7c9c1852ecdc9a80347bb5b9be21",
+   "size": 7262,
    "kind": "script",
    "entry": false
   },
@@ -725,7 +704,7 @@
   },
   {
    "path": "script/game/story/ch6.js",
-   "sha256": "7a6a8aca43df4aa79b744729406e3342971fa4f92bb5aa052fea78c1de6fedc9",
+   "sha256": "2fcf5ecc7fa7c1fe0bea089dc6c113a89ae924ecf2399a98c986da0bb4ad0be9",
    "size": 25403,
    "kind": "script",
    "entry": false
@@ -809,8 +788,8 @@
   },
   {
    "path": "script/gfx/sky.js",
-   "sha256": "42be63fb8aed8fc548a6ec154fceaf915a19f14ec8f4f5a45c0b3e62e703abf7",
-   "size": 8341,
+   "sha256": "d85f809d26bf60e02a17fa11c0f7b01ff1f594d172e7d7e663f9c492c96e2240",
+   "size": 8418,
    "kind": "script",
    "entry": false
   },
@@ -823,15 +802,15 @@
   },
   {
    "path": "script/world/layout.js",
-   "sha256": "31f7ab24b9804eb9ac35c4e2185cdd5bb315c6294bd125b5e23c94d7ac0e1f50",
-   "size": 31328,
+   "sha256": "e616a60beb7c931ce70957c1cc3ee5e213194c04fa412ee511383b17df937f14",
+   "size": 31569,
    "kind": "script",
    "entry": false
   },
   {
    "path": "script/world/materials.js",
-   "sha256": "b916c0ce0b59ae8c8f933b1f91a1f5a9b58e61de35bf6c148f84796ad547a632",
-   "size": 10753,
+   "sha256": "89f5fbebca3c227b692c6fc916d2f14bb3d2039ea9ab1afb93644641df99f1a5",
+   "size": 12335,
    "kind": "script",
    "entry": false
   }

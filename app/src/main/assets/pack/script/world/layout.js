@@ -30,11 +30,11 @@ const ox = (a, x) => x + AREA[a][0], oz = (a, z) => z + AREA[a][1];
 
 export const P = {
   ch1House: { x0: 336, x1: 484, z0: 2194, z1: 2290, door: 408, y: 56, yardX0: 296, yardX1: 490, yardZ0: 2180, yardZ1: 2312, garageX0: 298, garageX1: 336, garageZ0: 2198, garageZ1: 2262 },
-  ch1MillerHouse: { x0: 198, x1: 262, z0: 2196, z1: 2256, y: 56 },
-  ch1WagnerHouse: { x0: 524, x1: 586, z0: 2196, z1: 2256, y: 56 },
-  ch1Apothecary: { x0: 210, x1: 270, z0: 2052, z1: 2098, y: 56 },
+  ch1MillerHouse: { x0: 188, x1: 284, z0: 2196, z1: 2280, y: 56, yardX0: 184, yardX1: 290, yardZ0: 2180, yardZ1: 2284 },
+  ch1WagnerHouse: { x0: 516, x1: 602, z0: 2196, z1: 2280, y: 56, yardX0: 514, yardX1: 606, yardZ0: 2180, yardZ1: 2284 },
+  ch1Apothecary: { x0: 186, x1: 270, z0: 2012, z1: 2098, y: 56 },
   ch1UniHall: { x0: 448, x1: 512, z0: 2052, z1: 2094, y: 56 },
-  ch1Bookshop: { x0: 526, x1: 584, z0: 2052, z1: 2098, y: 56 },
+  ch1Bookshop: { x0: 526, x1: 610, z0: 2012, z1: 2098, y: 56 },
   ch1Arch: { x0: 376, x1: 424, z0: 2090, z1: 2102, y: 56 },
   ch2Lab: { x0: 368, x1: 432, z0: 1896, z1: 1944, door: 400, y: 56 },
   ch3Garage: { x0: 648, x1: 712, z0: 2184, z1: 2232, door: 680, y: 56 },
@@ -68,6 +68,8 @@ export const P = {
   waterfallX: [ox('cliff', 144), ox('cliff', 168)],
   ledgeX: [ox('north', 552), ox('north', 648)],
   gorge: { m: oz('north', 184), n: oz('north', 208), s: oz('north', 280) },
+  // Dedicated spacious Testing Hub ("Полигон Пробоя"): 40 x 37.5 m open concrete & stone courtyard
+  hubArena: { x0: 1080, x1: 1400, z0: 1540, z1: 1840, cx: 1240, cz: 1690, y: 56 },
 };
 P.cave.z = oz('north', 64);
 
@@ -85,6 +87,7 @@ export const CLEARINGS = [
   { ...xz(o('upstream', 220, 368)), r: 36, h: 60 },
   { ...xz(o('cliff', 200, 304)), r: 32, h: 64 },
   { ...xz(o('north', 608, 312)), r: 44, h: 64 },
+  { x: 1240, z: 1690, r: 192, h: 56 },
 ];
 function xz(p) { return { x: p[0], z: p[1] }; }
 
@@ -228,7 +231,7 @@ export function gorgeEdges(x) {
 const CLEARINGS_FAST = CLEARINGS.map((c) => ({
   x: c.x,
   z: c.z,
-  maxD: c.r + Math.ceil(14.0 / VS),
+  maxD: c.r + Math.ceil(28.0 / VS),
   cmx: c.x * VS,
   cmz: c.z * VS,
   cr: c.r * VS,
@@ -254,8 +257,8 @@ function groundBase(x, z, skipMicro = false) {
   for (let i = 0; i < CLEARINGS_FAST.length; i++) {
     const c = CLEARINGS_FAST[i];
     if (Math.abs(x - c.x) > c.maxD || Math.abs(z - c.z) > c.maxD) continue;
-    const d = Math.hypot(xm - c.cmx, zm - c.cmz) + (fbm2(xm / 7, zm / 7, 41, 2) - 0.5) * 4.5;
-    const t = smoothstep(c.cr + 12.0, c.cr - 2.0, d);
+    const d = Math.hypot(xm - c.cmx, zm - c.cmz) + (fbm2(xm / 12, zm / 12, 41, 2) - 0.5) * 3.2;
+    const t = smoothstep(c.cr + 26.0, c.cr - 2.0, d);
     if (t > 0) hm = hm + (c.ch - hm) * t;
   }
   const g = gorgeEdges(x);
@@ -291,6 +294,10 @@ function groundBase(x, z, skipMicro = false) {
   if (x >= 180 && x <= 604 && z >= 2040 && z <= 2324) {
     return 56;
   }
+  const H = P.hubArena;
+  if (H && x >= H.x0 - 14 && x <= H.x1 + 14 && z >= H.z0 - 14 && z <= H.z1 + 14) {
+    return H.y;
+  }
   const voxY = Math.round(hm / VS);
   return clamp(voxY, 2, WY - 2);
 }
@@ -298,7 +305,11 @@ function groundBase(x, z, skipMicro = false) {
 export function inHouse(x, z, m = 0) {
   // When checking tree/vegetation clearance (m >= 6), keep the entire Chapter 1 suburban block,
   // road loop, yards, and houses free of random forest trees.
-  if (m >= 6 && x >= 184 - m && x <= 596 + m && z >= 2044 - m && z <= 2316 + m) {
+  if (m >= 6 && x >= 178 - m && x <= 616 + m && z >= 2008 - m && z <= 2316 + m) {
+    return true;
+  }
+  const H = P.hubArena;
+  if (H && m >= 4 && x >= H.x0 - m - 16 && x <= H.x1 + m + 16 && z >= H.z0 - m - 16 && z <= H.z1 + m + 16) {
     return true;
   }
   const boxes = [P.house, P.ch1House, P.ch1MillerHouse, P.ch1WagnerHouse, P.ch1Apothecary, P.ch1UniHall, P.ch1Bookshop, P.ch1Arch, P.ch2Lab, P.ch3Garage, P.ch3Platform, P.ch4Motel, P.ch4Gas];
@@ -464,7 +475,7 @@ export const STREET = poly([[-40, 2159], [744, 2159]], 28, { hw: 13, y: 56 });
 export const FIELD_TRACK = poly([[250, 1806], [250, 1580], [232, 1420], [214, 1300]], 26, { hw: 9 });
 export const POWERLINE = poly([[236, 2066], [236, 1576], [210, 1300], [196, 1000], [196, 560]], 34, { hw: 28 });
 export const GULLY = poly([[448, 1716], [516, 1690], [580, 1660], [628, 1636], [645, 1627]], 40, { depth: 17 });
-export const FIELD = { x0: 112, x1: 464, z0: 1576, z1: 1792, y: 59 };
+export const FIELD = { x0: 112, x1: 464, z0: 1576, z1: 1792, y: 56 };
 // garden plots: 4 columns x 2 rows separated by grass balks; kind: 0 potato ridges N-S, 1 potato ridges E-W,
 // 2 vegetable beds, 3 dug-over soil, 4 fallow (grass)
 export const GARDENS = { x0: 196, x1: 588, z0: 2328, z1: 2440, cols: [196, 284, 392, 500, 588], rows: [2328, 2384, 2440], kinds: [2, 0, 2, 1, 1, 3, 0, 4], balk: 3 };
@@ -529,25 +540,27 @@ function landEval(x, z, h, sd, hw) {
   let code = 0, dh = 0, onStreet = false;
 
   if (x > FIELD.x0 - 24 && x < FIELD.x1 + 24 && z > FIELD.z0 - 24 && z < FIELD.z1 + 24) {
-    // harvested field: long gentle swells, drill rows of stubble with bare soil between them
+    // harvested field: level meadow-stubble plain with soft organic soil patches (no high-frequency stripe Moiré)
     const s = rectSd(FIELD, x, z);
-    h += (FIELD.y + (fbm2(x / 420, z / 420, 23, 2) - 0.5) * 8 - h) * smoothstep(24, -24, s);
-    if (s < (hash2i(x >> 1, z >> 1, 13) - 0.6) * 5) code = (z + Math.floor(fbm2(x / 120, z / 60, 29, 2) * 5)) % 5 < 3 ? LS.STUBBLE : LS.SOIL;
+    h += (FIELD.y - h) * smoothstep(24, -24, s);
+    if (s < (hash2i(x >> 2, z >> 2, 13) - 0.5) * 8) {
+      code = fbm2(x / 42, z / 42, 29, 2) > 0.68 ? LS.SOIL : LS.STUBBLE;
+    }
   } else if (x >= GARDENS.x0 - 16 && x <= GARDENS.x1 + 16 && z >= GARDENS.z0 - 16 && z <= GARDENS.z1 + 16) {
-    // garden plots behind the houses, rising very gently to the south
+    // garden plots behind the houses
     const s = rectSd(GARDENS, x, z);
-    h += (56 + (z - GARDENS.z0) / 56 - h) * smoothstep(16, -8, s);
+    h += (56 - h) * smoothstep(16, -8, s);
     if (s <= 0) {
       const ci = x < GARDENS.cols[1] ? 0 : x < GARDENS.cols[2] ? 1 : x < GARDENS.cols[3] ? 2 : 3, ri = z < GARDENS.rows[1] ? 0 : 1;
       const u = x - GARDENS.cols[ci] - GARDENS.balk, v = z - GARDENS.rows[ri] - GARDENS.balk;
       const uw = GARDENS.cols[ci + 1] - GARDENS.cols[ci] - GARDENS.balk * 2, vw = GARDENS.rows[ri + 1] - GARDENS.rows[ri] - GARDENS.balk * 2;
       if (u >= 0 && v >= 0 && u <= uw && v <= vw) {
         const kind = GARDENS.kinds[ci + ri * 4];
-        if (kind === 0 || kind === 1) { // potato ridges: 3 voxels of ridge, 3 of furrow
-          if ((kind === 0 ? u : v) % 6 < 3) { code = LS.TILLED; dh = 1; } else code = LS.SOIL;
-        } else if (kind === 2) { // raised beds 1.25 m wide with trodden paths between and a cross path in the middle
-          if (v % 13 < 10 && Math.abs(u - (uw >> 1)) > 2) { code = LS.TILLED; dh = 1; } else code = LS.BEDPATH;
-        } else if (kind === 3) code = v % 8 === 0 ? LS.SOIL : LS.TILLED; // dug over, spade rows
+        if (kind === 0 || kind === 1) {
+          code = LS.TILLED;
+        } else if (kind === 2) {
+          if (Math.abs(u - (uw >> 1)) > 2) code = LS.TILLED; else code = LS.BEDPATH;
+        } else if (kind === 3) code = LS.SOIL;
       }
     }
   }
@@ -607,7 +620,6 @@ function landEval(x, z, h, sd, hw) {
   if (code === 0 && sd < hw + 60) {
     const cd = Math.hypot(x - P.crossing[0], z - P.crossing[1]);
     if (cd < 170 && sd < hw + 6 + 16 * fbm2(x / 30, z / 30, 43, 2) * smoothstep(170, 110, cd)) code = fbm2(x / 5, z / 5, 47, 2) > 0.66 ? LS.PEBBLE : LS.BEACH; // sandy shore at the crossing
-    else if (sd < hw + 3 + hash2i(x >> 1, z >> 1, 21) * 5) code = hash2i(x, z, 25) > 0.5 ? LS.PEBBLE : LS.BEACH; // pebbly water margin
     else if (z > FLOOD_Z0 + 20 && z < FLOOD_Z1 - 20 && sd < hw + 56) code = LS.FLOOD;
   } else if (code === 0 && polyNear(POWERLINE, x, z) < 23 + hash2i(x >> 2, z >> 2, 23) * 6) code = LS.CLEARCUT;
 
@@ -628,6 +640,8 @@ export function roadEdgeDist(x, z) {
 
 // open land and transport corridors: no trees, bushes or boulders here
 export function landOpen(x, z) {
+  const H = P.hubArena;
+  if (H && x >= H.x0 - 20 && x <= H.x1 + 20 && z >= H.z0 - 20 && z <= H.z1 + 20) return true;
   if (rectSd(FIELD, x, z) < 10 || rectSd(GARDENS, x, z) < 10 || rectSd(PASTURE, x, z) < 0) return true;
   return polyNear(HIGHWAY, x, z) < 60 || polyNear(RAIL, x, z) < 42 || polyNear(STREET, x, z) < 27 || polyNear(FIELD_TRACK, x, z) < 24
     || polyNear(POWERLINE, x, z) < 30 || polyNear(GULLY, x, z) < 30;

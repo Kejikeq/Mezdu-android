@@ -5,23 +5,28 @@ import { m } from './common.js';
 export function setupChapter4(ctx) {
   const { G, adapt, addClue, gD, registerChapterExit, say, voice } = ctx;
   const CH4_M = P.ch4Motel;
+  const ch4GasY = 7.25;
   const ch4FloorY = 7.5;
-  const ch4DoorX = m(CH4_M.door + 1), ch4DoorZ = m(CH4_M.z0);
-  // Gas station & Motel lights & props
-  G.place('lantern_post', m(674), gD(m(674), m(1904)), m(1904), 0, { mask: 3 });
-  G.light({ pos: [m(674), gD(m(674), m(1904)) + 2.2, m(1904)], r: 8.5, col: [1, 0.78, 0.45], k: 2.1, mask: 3 });
+  const ch4DoorX = m(CH4_M.door + 4), ch4DoorZ = m(CH4_M.z0);
+  // Gas station & Motel lights & props (gas station slab top is y = 58 * 0.125 = 7.25m)
+  G.place('lantern_post', m(668), ch4GasY, m(1896), 0, { mask: 3 });
+  G.light({ pos: [m(668), ch4GasY + 2.2, m(1896)], r: 8.5, col: [1, 0.78, 0.45], k: 2.1, mask: 3 });
   G.light({ pos: [m(680), 9.2, m(1944)], r: 9.0, col: [1, 0.68, 0.36], k: 2.2, mask: 3 });
-  const ch4KeyProp = G.place('item_rusty_key', m(680), gD(m(680), m(1904)) + 0.55, m(1904), 0.3, { mask: 3, scale: 2.5, highlight: true });
-  G.place('sofa', m(674.5), ch4FloorY, m(1946), Math.PI / 2, { mask: 3 });
-  G.place('table', m(684.5), ch4FloorY, m(1944), 0, { mask: 3 });
-  const ch4BookProp = G.place('item_letter_full', m(684.5), ch4FloorY + 0.65, m(1944), 0.2, { mask: 3, scale: 2.2, pitch: -Math.PI / 2, highlight: true });
-  const ch4RadioProp = G.place('item_cassette', m(674.5), ch4FloorY + 0.65, m(1940), 0.4, { mask: 3, scale: 2.0, highlight: true });
+  G.place('workbench', m(680), ch4GasY, m(1900), 0, { mask: 3 });
+  const ch4KeyProp = G.place('item_rusty_key', m(680), ch4GasY + 0.86, m(1900), 0.3, { mask: 3, scale: 2.5, highlight: true });
+  G.place('phone_booth', m(692), ch4GasY, m(1900), 0, { mask: 3 });
+  G.place('sofa', m(660), ch4FloorY, m(1950), Math.PI / 2, { mask: 3 });
+  G.place('drawers', m(660), ch4FloorY, m(1936), Math.PI / 2, { mask: 3 });
+  const ch4RadioProp = G.place('item_cassette', m(660), ch4FloorY + 0.88, m(1936), 0.4, { mask: 3, scale: 2.0, highlight: true });
+  G.place('bed', m(698), ch4FloorY, m(1952), -Math.PI / 2, { mask: 3 });
+  G.place('table', m(692), ch4FloorY, m(1936), 0, { mask: 3 });
+  const ch4BookProp = G.place('item_letter_full', m(692), ch4FloorY + 0.65, m(1936), 0.2, { mask: 3, scale: 2.2, pitch: -Math.PI / 2, highlight: true });
   const ch4DoorOpenProp = G.place('door_open', ch4DoorX - 0.5, ch4FloorY, ch4DoorZ - 0.25, Math.PI / 2, { mask: 3, visible: false });
 
   // Mandatory 4A: Gas Station fusebox & Room 4 key
   G.interact({
-    pos: [m(680), gD(m(680), m(1904)) + 0.8, m(1904)], r: 2.4, world: 'any',
-    label: 'Щиток бензоколонки: подать питание и забрать ключ от Номера 4',
+    pos: [m(680), ch4GasY + 0.86, m(1900)], r: 2.4, world: 'any',
+    label: 'Стойка бензоколонки: подать питание и забрать ключ от Номера 4',
     icon: 'key', prop: ch4KeyProp,
     cond: () => G.chapter === 4 && !G.has('motel_key'),
     run: async () => {
@@ -37,7 +42,7 @@ export function setupChapter4(ctx) {
 
   // Optional 4B: Payphone coin by the gas station pillar
   G.interact({
-    pos: [m(686), gD(m(686), m(1904)) + 0.8, m(1904)], r: 2.2, world: 'any',
+    pos: [m(692), ch4GasY + 1.0, m(1900)], r: 2.2, world: 'any',
     label: 'Таксофон у АЗС: осмотреть возврат монет (опц.)',
     icon: 'eye',
     cond: () => G.chapter === 4 && !G.memoryBoard.hasClue('c4_payphone_coin'),
@@ -50,13 +55,13 @@ export function setupChapter4(ctx) {
   // Mandatory Gate 4: Motel Room 4 Door
   G.interact({
     pos: [ch4DoorX, ch4FloorY + 0.8, ch4DoorZ - 0.5], r: 2.4, world: 'any',
-    label: () => (G.has('motel_key') ? 'Отпереть дверь Номера 4 ключом с ромбом' : 'Дверь Номера 4 мотеля «Поворот» (ключ у щитка АЗС)'),
+    label: () => (G.has('motel_key') ? 'Отпереть дверь Номера 4 ключом с ромбом' : 'Дверь Номера 4 мотеля «Поворот» (ключ у стойки АЗС)'),
     icon: 'door',
     cond: () => G.chapter === 4 && !G.edits.ch4Door,
     run: async () => {
       if (!G.has('motel_key')) {
         G.audio.sfx('click');
-        say('Четвёртый номер заперт. Ключ на латунном ромбе висит у щитка под навесом АЗС.', 3.8);
+        say('Четвёртый номер заперт. Ключ на латунном ромбе лежит на стойке под навесом АЗС.', 3.8);
         return;
       }
       G.audio.sfx('door');
@@ -69,7 +74,7 @@ export function setupChapter4(ctx) {
 
   // Mandatory 4C: Guestbook inside Motel Room 4
   G.interact({
-    pos: [m(684.5), ch4FloorY + 0.8, m(1944)], r: 2.4, world: 'any',
+    pos: [m(692), ch4FloorY + 0.8, m(1936)], r: 2.4, world: 'any',
     label: 'Стол в Номере 4: изучить выписку из книги постояльцев',
     icon: 'read', prop: ch4BookProp,
     cond: () => G.chapter === 4 && !G.has('guestbook_page'),
@@ -90,7 +95,7 @@ export function setupChapter4(ctx) {
 
   // Optional 4D: Weather radio inside Motel Room 4
   G.interact({
-    pos: [m(674.5), ch4FloorY + 0.8, m(1940)], r: 2.1, world: 'any',
+    pos: [m(660), ch4FloorY + 0.88, m(1936)], r: 2.1, world: 'any',
     label: 'Тумбочка: включить дорожный радиоприёмник (опц.)',
     icon: 'sound', prop: ch4RadioProp,
     cond: () => G.chapter === 4 && !G.memoryBoard.hasClue('c4_weather_radio'),

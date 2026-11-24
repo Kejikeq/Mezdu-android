@@ -98,7 +98,9 @@ export function setupStory(G) {
     if (ch === 6 && !G.flags.deerTouched) S.placeDeer();
     if (ch === 8) {
       const D2 = G.deer;
-      D2.visible = true; D2.pos = [CL[0] - 0.8, gD(CL[0] - 0.8, CL[1] - 0.6), CL[1] - 0.6]; D2.yaw = Math.PI; D2.target = null; D2.bowTarget = 0.3; D2.dissolving = false; D2.fade = 1.0;
+      D2.visible = true;
+      D2.pos[0] = CL[0] - 0.8; D2.pos[1] = gD(CL[0] - 0.8, CL[1] - 0.6); D2.pos[2] = CL[1] - 0.6;
+      D2.yaw = Math.PI; D2.target = null; D2.bowTarget = 0.3; D2.dissolving = false; D2.fade = 1.0;
     }
     G.rabbit.visible = ch === 5 && !G.flags.rabbitPet;
     G.refreshTools();
@@ -213,6 +215,7 @@ export function setupStory(G) {
     G.chapter = 1;
     const mx = m(408), mz = m(2182);
     const y = gD(mx, mz);
+    S._menuMx = mx; S._menuMz = mz; S._menuBaseY = y;
     G.player.place(mx, y, mz, Math.PI);
     G.player.pose = 'idle';
     G.rabbit.visible = false;
@@ -220,13 +223,14 @@ export function setupStory(G) {
   };
   S.menuUpdate = (dt) => {
     S.menuA += dt * 0.045;
-    const mx = m(408), mz = m(2182);
-    const y = gD(mx, mz);
+    const mx = S._menuMx ?? m(408), mz = S._menuMz ?? m(2182);
+    const y = S._menuBaseY ?? gD(mx, mz);
     const a = S.menuA;
     const r = 4.6 + Math.sin(a * 0.6) * 0.5;
     const cx = mx + Math.sin(a) * r, cz = mz - 5.5 + Math.cos(a) * r;
-    G.player.camPos = [cx, Math.max(y, G.groundAt(cx, cz)) + 2.1 + Math.sin(a * 0.7) * 0.25, cz];
-    G.player.camTarget = [mx, y + 1.5, mz + 1.5];
+    const cp = G.player.camPos, ct = G.player.camTarget;
+    cp[0] = cx; cp[1] = Math.max(y, G.groundAt(cx, cz)) + 2.1 + Math.sin(a * 0.7) * 0.25; cp[2] = cz;
+    ct[0] = mx; ct[1] = y + 1.5; ct[2] = mz + 1.5;
   };
   return S;
 }

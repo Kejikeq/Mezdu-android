@@ -41,7 +41,7 @@ struct RigPose {
   seatId: u32, // 0:none, 1:ground, 2:bench, 3:sofa
   slot: u32,
   models: vec4u, // x: torso, y: head, z: uarm, w: uarmL
-  models2: vec4u, // x: farm, y: farmL, z: leg
+  models2: vec4u, // x: farm, y: farmL, z: leg, w: body (unified skinned mesh)
   _pad: vec3u,
 };
 struct Particle { p: vec4f, v: vec4f, c: vec4f };
@@ -98,7 +98,7 @@ fn rnd(i: u32, k: u32) -> f32 { return f32(hashu(i * 1664525u + k * 1013904223u 
     case 2u, 3u: {
       let wob = vec3f(sin(S.time * 0.5 + pt.c.w * 9.0), sin(S.time * 0.37 + pt.c.w * 5.0) * 0.5, cos(S.time * 0.43 + pt.c.w * 7.0)) * 0.06;
       var p = pt.p.xyz + (pt.v.xyz + S.wind.xyz * 0.15 + wob) * dt;
-      let hs = vec3f(9.0, 4.5, 9.0);
+      let hs = vec3f(6.5, 2.8, 6.5);
       let rel = p - S.cam.xyz + hs;
       p = S.cam.xyz + (rel - floor(rel / (2.0 * hs)) * 2.0 * hs) - hs;
       pt.p = vec4f(p, 1.0);

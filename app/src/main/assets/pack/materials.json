@@ -142,8 +142,8 @@
  {
   "id": 20,
   "name": "WINDOW",
-  "color": 5130816,
-  "flags": 7,
+  "color": 9483456,
+  "flags": 33,
   "pat": 21
  },
  {
@@ -184,7 +184,7 @@
  {
   "id": 26,
   "name": "LANTERN",
-  "color": 16764794,
+  "color": 16757830,
   "flags": 19,
   "pat": 0
  },
@@ -254,7 +254,7 @@
  {
   "id": 36,
   "name": "FLOOR",
-  "color": 8275506,
+  "color": 6107669,
   "flags": 3,
   "pat": 7
  },
@@ -625,7 +625,7 @@
  {
   "id": 89,
   "name": "PARQUET",
-  "color": 10120770,
+  "color": 7027480,
   "flags": 3,
   "pat": 33
  },
@@ -670,5 +670,82 @@
   "color": 15131092,
   "flags": 3,
   "pat": 8
+ },
+ {
+  "id": 96,
+  "name": "WP_STRIPES",
+  "color": 11107636,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 97,
+  "name": "WP_FLORAL",
+  "color": 10382884,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 98,
+  "name": "WP_BLUE",
+  "color": 9347764,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 99,
+  "name": "WP_OCHRE",
+  "color": 10907426,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 100,
+  "name": "WP_KITCHEN",
+  "color": 12094536,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 101,
+  "name": "WP_GREEN",
+  "color": 10138774,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 102,
+  "name": "TILE_BATH",
+  "color": 10931412,
+  "flags": 3,
+  "pat": 30
+ },
+ {
+  "id": 103,
+  "name": "GARAGE_FLOOR",
+  "color": 7632498,
+  "flags": 3,
+  "pat": 27
+ },
+ {
+  "id": 104,
+  "name": "N_WP",
+  "color": 6049606,
+  "flags": 3,
+  "pat": 38
+ },
+ {
+  "id": 105,
+  "name": "N_TILE",
+  "color": 4937306,
+  "flags": 3,
+  "pat": 30
+ },
+ {
+  "id": 106,
+  "name": "N_GLASS",
+  "color": 3876392,
+  "flags": 33,
+  "pat": 34
  }
 ]

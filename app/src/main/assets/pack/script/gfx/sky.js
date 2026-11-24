@@ -11,14 +11,14 @@ const dir = (x, y, z) => { const l = Math.hypot(x, y, z); return [x / l, y / l, 
 // fog: colour + density; exposure: nominal exposure; ev: scene EV limits (the automatic exposure may move
 // half of that range away from the nominal value).
 export const SKIES = {
-  morning: { sunDir: dir(0.78, 0.30, 0.55), sun: [2.1, 1.86, 1.48], zen: [0.4, 0.58, 0.92], hor: [0.98, 0.99, 0.98], gnd: [0.21, 0.2, 0.15], glow: [1.0, 0.84, 0.58], fog: [0.40, 0.41, 0.41, 0.018], exposure: 1.8, ev: [10, 14], away: [0.82, 0.9, 1.0], stars: 0, dark: 0, key: 1 },
-  day: { sunDir: dir(0.45, 0.72, 0.52), sun: [2.0, 1.95, 1.85], zen: [0.28, 0.5, 1.0], hor: [0.84, 0.95, 1.1], gnd: [0.2, 0.2, 0.17], glow: [1.0, 0.92, 0.75], fog: [0.36, 0.38, 0.41, 0.016], exposure: 1.71, ev: [10, 14], away: [0.8, 0.93, 1.1], stars: 0, dark: 0, key: 1 },
-  overcast: { sunDir: dir(0.4, 0.7, 0.5), sun: [0.5, 0.5, 0.52], zen: [0.55, 0.58, 0.62], hor: [0.64, 0.66, 0.68], gnd: [0.14, 0.14, 0.13], glow: [0.18, 0.18, 0.18], fog: [0.4, 0.42, 0.44, 0.03], exposure: 2.07, ev: [9, 12], away: [0.62, 0.64, 0.67], stars: 0, dark: 0.15, key: 0.9 },
-  dusk: { sunDir: dir(-0.7, 0.12, 0.5), sun: [0.26, 0.23, 0.29], zen: [0.1, 0.13, 0.22], hor: [0.44, 0.31, 0.27], gnd: [0.05, 0.05, 0.055], glow: [0.34, 0.2, 0.15], fog: [0.16, 0.16, 0.19, 0.035], exposure: 2.88, ev: [8, 11], away: [0.17, 0.2, 0.3], stars: 0.35, dark: 0.8, key: 0.5 },
-  sunset: { sunDir: dir(-0.82, 0.13, 0.4), sun: [2.0, 1.05, 0.46], zen: [0.18, 0.28, 0.6], hor: [1.25, 0.62, 0.26], gnd: [0.16, 0.11, 0.07], glow: [1.3, 0.6, 0.2], fog: [0.52, 0.36, 0.26, 0.02], exposure: 1.98, ev: [8, 11], away: [0.5, 0.42, 0.58], stars: 0.06, dark: 0.45, key: 0.85 },
-  night: { sunDir: dir(-0.35, 0.62, -0.5), sun: [0.1, 0.13, 0.2], zen: [0.012, 0.018, 0.04], hor: [0.03, 0.04, 0.07], gnd: [0.006, 0.007, 0.01], glow: [0.05, 0.06, 0.09], fog: [0.022, 0.028, 0.045, 0.03], exposure: 3.96, ev: [3, 6], away: [0.024, 0.032, 0.06], stars: 1, dark: 1, key: 0.6 },
-  nightmare: { sunDir: dir(0.78, 0.30, 0.55), sun: [0.55, 0.1, 0.07], zen: [0.045, 0.03, 0.055], hor: [0.174, 0.031, 0.025], gnd: [0.035, 0.02, 0.02], glow: [0.59, 0.087, 0.043], fog: [0.085, 0.035, 0.03, 0.05], exposure: 1.4, ev: [8, 9], away: [0.09, 0.02, 0.022], stars: 0, dark: 1, key: 0.8 }, // a narrow EV range: the nightmare stays dark
-  void: { sunDir: dir(0.78, 0.30, 0.55), sun: [0, 0, 0], zen: [0.004, 0.004, 0.005], hor: [0.006, 0.005, 0.006], gnd: [0.004, 0.003, 0.004], glow: [0, 0, 0], fog: [0.006, 0.004, 0.006, 0.05], exposure: 2.16, ev: [3, 6], away: [0.006, 0.005, 0.006], stars: 0, dark: 1, key: 0.6 },
+  morning: { sunDir: dir(0.78, 0.30, 0.55), sun: [2.95, 2.40, 1.66], zen: [0.062, 0.23, 0.78], hor: [1.06, 0.82, 0.56], gnd: [0.095, 0.115, 0.082], glow: [1.48, 0.96, 0.46], fog: [0.38, 0.50, 0.67, 0.0045], exposure: 1.56, ev: [10, 13.5], away: [0.33, 0.56, 0.88], stars: 0, dark: 0, key: 1 },
+  day: { sunDir: dir(0.45, 0.72, 0.52), sun: [2.85, 2.60, 2.24], zen: [0.052, 0.21, 0.80], hor: [0.68, 0.85, 1.06], gnd: [0.10, 0.12, 0.088], glow: [1.28, 1.04, 0.72], fog: [0.34, 0.50, 0.69, 0.0041], exposure: 1.50, ev: [10, 13.5], away: [0.42, 0.65, 0.94], stars: 0, dark: 0, key: 1 },
+  overcast: { sunDir: dir(0.4, 0.7, 0.5), sun: [0.74, 0.76, 0.82], zen: [0.32, 0.40, 0.53], hor: [0.58, 0.64, 0.71], gnd: [0.10, 0.11, 0.10], glow: [0.25, 0.27, 0.29], fog: [0.36, 0.42, 0.49, 0.0115], exposure: 1.82, ev: [9, 12], away: [0.46, 0.53, 0.62], stars: 0, dark: 0.15, key: 0.92 },
+  dusk: { sunDir: dir(-0.7, 0.12, 0.5), sun: [0.44, 0.33, 0.38], zen: [0.048, 0.080, 0.23], hor: [0.64, 0.35, 0.22], gnd: [0.036, 0.039, 0.048], glow: [0.58, 0.27, 0.15], fog: [0.14, 0.16, 0.25, 0.0135], exposure: 2.45, ev: [8, 11], away: [0.13, 0.18, 0.34], stars: 0.35, dark: 0.8, key: 0.54 },
+  sunset: { sunDir: dir(-0.82, 0.13, 0.4), sun: [2.85, 1.32, 0.46], zen: [0.068, 0.15, 0.52], hor: [1.55, 0.65, 0.21], gnd: [0.10, 0.07, 0.05], glow: [1.68, 0.72, 0.19], fog: [0.49, 0.36, 0.34, 0.0082], exposure: 1.72, ev: [8, 11], away: [0.30, 0.34, 0.60], stars: 0.06, dark: 0.45, key: 0.88 },
+  night: { sunDir: dir(-0.35, 0.62, -0.5), sun: [0.14, 0.18, 0.29], zen: [0.008, 0.015, 0.042], hor: [0.024, 0.037, 0.074], gnd: [0.005, 0.007, 0.010], glow: [0.07, 0.09, 0.14], fog: [0.018, 0.027, 0.048, 0.0135], exposure: 3.55, ev: [3, 6], away: [0.018, 0.029, 0.060], stars: 1, dark: 1, key: 0.62 },
+  nightmare: { sunDir: dir(0.78, 0.30, 0.55), sun: [0.66, 0.115, 0.082], zen: [0.042, 0.026, 0.052], hor: [0.195, 0.033, 0.027], gnd: [0.032, 0.017, 0.019], glow: [0.68, 0.10, 0.048], fog: [0.082, 0.028, 0.026, 0.040], exposure: 1.38, ev: [8, 9], away: [0.085, 0.018, 0.022], stars: 0, dark: 1, key: 0.82 }, // a narrow EV range: the nightmare stays dark
+  void: { sunDir: dir(0.78, 0.30, 0.55), sun: [0, 0, 0], zen: [0.004, 0.004, 0.005], hor: [0.006, 0.005, 0.006], gnd: [0.004, 0.003, 0.004], glow: [0, 0, 0], fog: [0.006, 0.004, 0.006, 0.05], exposure: 2.10, ev: [3, 6], away: [0.006, 0.005, 0.006], stars: 0, dark: 1, key: 0.6 },
 };
 // Monday morning ... Sunday 03:17, «Между»
 export const CHAPTER_SKY = { 1: 'morning', 2: 'day', 3: 'day', 4: 'overcast', 5: 'dusk', 6: 'morning', 7: 'day', 8: 'sunset', 9: 'night', 10: 'dusk' };
@@ -83,10 +83,10 @@ function prep(name) {
 // The lighting state of a frame (the object is reused: no allocations per frame).
 // inside: the hero is in a room (less sky light, thinner fog); headache: 0..1 (story effect on the fog).
 const L = { sunDir: null, sunD: null, sunN: null, skyD: [0, 0, 0, 0], skyN: [0, 0, 0, 0], gndD: [0, 0, 0, 0], gndN: [0, 0, 0, 0], fogD: [0, 0, 0, 0], fogN: [0, 0, 0, 0],
-  fogP: [7.0, 0.16, 0.5, 58], exposure: 1, exposureN: 1, evRange: 2, evRangeN: 0.5, key: 1, keyN: 1, amb: 1, dark: 0, envD: null, envN: null };
+  fogP: [2.5, 0.18, 0.5, 120], exposure: 1, exposureN: 1, evRange: 2, evRangeN: 0.5, key: 1, keyN: 1, amb: 1, dark: 0, envD: null, envN: null };
 export function lightFor(chapter, inside, headache, isVoid) {
   const d = prep(isVoid ? 'void' : (CHAPTER_SKY[chapter] || 'day')), n = prep(isVoid ? 'void' : 'nightmare');
-  const amb = inside ? 0.45 : 1, fogScale = inside ? 0.28 : 1, h = headache || 0;
+  const amb = inside ? 0.24 : 1, fogScale = inside ? 0.28 : 1, h = headache || 0;
   L.sunDir = d.P.sunDir; L.sunD = d.sun; L.sunN = n.sun; L.envD = d; L.envN = n; L.amb = amb;
   for (let i = 0; i < 3; i++) { L.skyD[i] = d.up[i] * amb; L.skyN[i] = n.up[i] * amb; L.gndD[i] = d.down[i] * amb; L.gndN[i] = n.down[i] * amb; }
   const fd = d.P.fog, fn = n.P.fog;
@@ -94,6 +94,6 @@ export function lightFor(chapter, inside, headache, isVoid) {
   L.fogN[0] = fn[0]; L.fogN[1] = fn[1]; L.fogN[2] = fn[2]; L.fogN[3] = fn[3] * (isVoid ? 1 : fogScale * (1 + h * 2));
   L.dark = d.P.dark; L.key = d.P.key; L.keyN = n.P.key;
   L.exposure = d.P.exposure; L.exposureN = n.P.exposure; L.evRangeN = (n.P.ev[1] - n.P.ev[0]) / 2;
-  L.evRange = inside ? 1.5 : (d.P.ev[1] - d.P.ev[0]) / 2;
+  L.evRange = inside ? 0.58 : (d.P.ev[1] - d.P.ev[0]) / 2;
   return L;
 }

@@ -368,14 +368,14 @@ function placeHouseRooms({ G }) {
   G.light({ pos: [m(408), ch1Floor2Y + 2.8, m(2206)], r: 6.0, col: [0.9, 0.94, 1.0], k: 1.8, mask: 3 });
 
   // 3. 1ST FLOOR — LIVING ROOM (x: 424..484, z: 2194..2244 — Generous spacing between sofa, coffee table, and fireplace)
-  G.place('fireplace', m(481), ch1FloorY, m(2224), -Math.PI / 2, { mask: 3 });
-  G.light({ pos: [m(478), ch1FloorY + 1.2, m(2224)], r: 7.5, col: [1.0, 0.58, 0.2], k: 2.5, mask: 1, flicker: true });
-  G.place('sofa', m(446), ch1FloorY, m(2224), Math.PI / 2, { mask: 1 });
-  G.place('sofa_torn', m(446), ch1FloorY, m(2224), Math.PI / 2, { mask: 2 });
-  G.place('table', m(460), ch1FloorY, m(2224), Math.PI / 2, { mask: 1 });
-  G.place('table_broken', m(460), ch1FloorY, m(2224), Math.PI / 2 + 0.15, { mask: 2 });
+  G.place('fireplace', m(481), ch1FloorY, m(2220), -Math.PI / 2, { mask: 3 });
+  G.light({ pos: [m(478), ch1FloorY + 1.2, m(2220)], r: 7.5, col: [1.0, 0.58, 0.2], k: 2.5, mask: 1, flicker: true });
+  G.place('sofa', m(446), ch1FloorY, m(2220), Math.PI / 2, { mask: 1 });
+  G.place('sofa_torn', m(446), ch1FloorY, m(2220), Math.PI / 2, { mask: 2 });
+  G.place('table', m(460), ch1FloorY, m(2220), Math.PI / 2, { mask: 1 });
+  G.place('table_broken', m(460), ch1FloorY, m(2220), Math.PI / 2 + 0.15, { mask: 2 });
   G.place('bookshelf', m(435), ch1FloorY, m(2197.2), 0, { mask: 3 }); // Flush against North wall (z=2194)
-  G.light({ pos: [m(454), ch1FloorY + 3.3, m(2220)], r: 9.0, col: [1, 0.8, 0.52], k: 2.2, mask: 1 });
+  G.light({ pos: [m(454), ch1FloorY + 3.3, m(2220)], r: 9.5, col: [1.0, 0.66, 0.22], k: 2.65, mask: 1 });
   G.light({ pos: [m(454), ch1FloorY + 3.3, m(2220)], r: 9.0, col: [0.25, 0.45, 0.95], k: 2.2, mask: 2, flicker: true });
 
   // 4. 1ST FLOOR — KITCHEN & DINING (x: 424..484, z: 2244..2290 — Counter & Fridge flush against East wall x=484, Dining Table centered with full clearance)
@@ -386,7 +386,7 @@ function placeHouseRooms({ G }) {
   G.place('chair', m(446), ch1FloorY, m(2275), Math.PI, { mask: 1 });
   G.place('teapot', m(446.8), ch1FloorY + 0.64, m(2268), -0.3, { mask: 3, scale: 1.25 });
   const ch1Cup = G.place('teacup', m(445.4), ch1FloorY + 0.64, m(2268), 0.4, { mask: 3, scale: 1.4 });
-  G.light({ pos: [m(454), ch1FloorY + 3.3, m(2268)], r: 8.5, col: [1, 0.78, 0.48], k: 2.2, mask: 1 });
+  G.light({ pos: [m(454), ch1FloorY + 3.3, m(2268)], r: 9.0, col: [1.0, 0.65, 0.22], k: 2.60, mask: 1 });
   G.light({ pos: [m(454), ch1FloorY + 3.3, m(2268)], r: 8.5, col: [0.3, 0.6, 0.95], k: 2.2, mask: 2, flicker: true });
 
   // 5. 1ST FLOOR — FULL BATHROOM (x: 336..392, z: 2262..2290 — Bathtub flush against West wall x=336, Washbasin flush against North wall z=2262)
@@ -403,25 +403,26 @@ function placeHouseRooms({ G }) {
   G.place('bookshelf', m(376), ch1FloorY, m(2235.5), Math.PI, { mask: 3 });
   G.place('answering_machine', m(363.2), ch1FloorY + 0.64, m(2205), 0, { mask: 3 });
   const ch1PassProp = G.place('item_student_card', m(364.8), ch1FloorY + 0.65, m(2205), 0.2, { mask: 3, scale: 2.2, pitch: -Math.PI / 2, highlight: true });
-  G.light({ pos: [m(364), ch1FloorY + 3.3, m(2216)], r: 8.0, col: [1, 0.8, 0.5], k: 2.1, mask: 1 });
+  G.light({ pos: [m(364), ch1FloorY + 3.3, m(2216)], r: 8.5, col: [1.0, 0.66, 0.22], k: 2.55, mask: 1 });
   G.light({ pos: [m(364), ch1FloorY + 3.3, m(2216)], r: 8.0, col: [0.25, 0.5, 0.95], k: 2.2, mask: 2, flicker: true });
 
   // 7. 1ST FLOOR — CENTRAL GRAND HALLWAY (x: 392..424, z: 2194..2290 — Mirror flush on West wall x=392, Grandfather Clock flush on North wall z=2194)
   const ch1MirrorProp = G.place('mirror_wall', m(393.4), ch1FloorY + 1.25, m(2201), Math.PI / 2, { mask: 3, scale: 1.3 });
   const ch1ClockProp = G.place('grandfather_clock', m(418), ch1FloorY, m(2197), 0, { mask: 3 });
-  G.light({ pos: [m(406), ch1FloorY + 3.3, m(2214)], r: 8.5, col: [1, 0.8, 0.52], k: 2.2, mask: 1 });
+  G.light({ pos: [m(406), ch1FloorY + 3.3, m(2214)], r: 9.2, col: [1.0, 0.66, 0.22], k: 2.65, mask: 1 });
   G.light({ pos: [m(406), ch1FloorY + 3.3, m(2214)], r: 8.5, col: [0.25, 0.45, 0.9], k: 2.2, mask: 2, flicker: true });
 
-  // 8. ATTACHED GARAGE (x: 298..336, z: 2198..2262 — Workbench flush against South wall z=2262)
+  // 8. ATTACHED GARAGE (x: 298..336, z: 2198..2262 — Parked wagon + Workbench flush against South wall z=2262)
+  G.place('car_wagon', m(317), ch1FloorY, m(2224), -Math.PI / 2, { mask: 3 });
   G.place('workbench', m(316), ch1FloorY, m(2258.5), Math.PI, { mask: 3 });
   G.place('tool_crowbar', m(316), ch1FloorY + 0.88, m(2258.5), 0.4, { mask: 3, scale: 1.4 });
-  G.light({ pos: [m(316), ch1FloorY + 3.3, m(2230)], r: 8.5, col: [0.9, 0.9, 0.95], k: 2.0, mask: 3 });
+  G.light({ pos: [m(317), ch1FloorY + 3.4, m(2230)], r: 8.5, col: [0.92, 0.94, 0.98], k: 2.1, mask: 3 });
 
-  // 9. 2ND FLOOR — MASTER BEDROOM SUITE (x: 424..484, z: 2194..2290 — All furniture flush against walls!)
-  G.place('bed', m(477.5), ch1Floor2Y, m(2214), -Math.PI / 2, { mask: 3, scale: 1.15 });
-  G.place('drawers', m(481.6), ch1Floor2Y, m(2202), -Math.PI / 2, { mask: 1 });
-  G.place('drawers_burnt', m(481.6), ch1Floor2Y, m(2202), -Math.PI / 2, { mask: 2 });
-  const ch1SedativeProp = G.place('item_cassette', m(481.6), ch1Floor2Y + 0.88, m(2202), 0.5, { mask: 3, scale: 1.6, highlight: true });
+  // 9. 2ND FLOOR — MASTER BEDROOM SUITE (x: 424..484, z: 2194..2290 — Bed centered against solid East wall between windows)
+  G.place('bed', m(477.5), ch1Floor2Y, m(2220), -Math.PI / 2, { mask: 3, scale: 1.15 });
+  G.place('drawers', m(481.6), ch1Floor2Y, m(2200), -Math.PI / 2, { mask: 1 });
+  G.place('drawers_burnt', m(481.6), ch1Floor2Y, m(2200), -Math.PI / 2, { mask: 2 });
+  const ch1SedativeProp = G.place('item_cassette', m(481.6), ch1Floor2Y + 0.88, m(2200), 0.5, { mask: 3, scale: 1.6, highlight: true });
 
   // Wall Calendar mounted flush on North wall (z=2194)
   G.place('wall_calendar', m(436), ch1Floor2Y + 1.38, m(2195.2), 0, { mask: 3 });
@@ -434,15 +435,15 @@ function placeHouseRooms({ G }) {
 
   // Bookshelf flush against South wall (z=2290)
   G.place('bookshelf', m(472), ch1Floor2Y, m(2287.5), Math.PI, { mask: 3 });
-  G.light({ pos: [m(454), ch1Floor2Y + 2.9, m(2234)], r: 9.5, col: [1, 0.82, 0.55], k: 2.2, mask: 1 });
+  G.light({ pos: [m(454), ch1Floor2Y + 2.9, m(2234)], r: 10.0, col: [1.0, 0.67, 0.23], k: 2.75, mask: 1 });
   G.light({ pos: [m(454), ch1Floor2Y + 2.9, m(2234)], r: 9.5, col: [0.25, 0.45, 0.9], k: 2.2, mask: 2, flicker: true });
 
   // 10. 2ND FLOOR — GUEST BEDROOM & UPPER LANDING (x: 336..392, z: 2194..2290)
   G.place('bed', m(342.6), ch1Floor2Y, m(2212), Math.PI / 2, { mask: 3, scale: 1.0 });
   G.place('drawers', m(339.2), ch1Floor2Y, m(2201), Math.PI / 2, { mask: 3 });
   G.place('wardrobe', m(389.2), ch1Floor2Y, m(2226), -Math.PI / 2, { mask: 3 });
-  G.light({ pos: [m(364), ch1Floor2Y + 2.9, m(2234)], r: 8.5, col: [1, 0.8, 0.5], k: 2.0, mask: 3 });
-  G.light({ pos: [m(406), ch1Floor2Y + 2.9, m(2256)], r: 8.0, col: [1, 0.8, 0.5], k: 2.0, mask: 3 });
+  G.light({ pos: [m(364), ch1Floor2Y + 2.9, m(2234)], r: 9.0, col: [1.0, 0.66, 0.22], k: 2.55, mask: 3 });
+  G.light({ pos: [m(406), ch1Floor2Y + 2.9, m(2256)], r: 8.5, col: [1.0, 0.66, 0.22], k: 2.55, mask: 3 });
 
   // 11. BASEMENT (x: 344..476, z: 2204..2288, y = 3.625m — 3.25m high ceiling!)
   G.place('table', m(372), ch1BasementY, m(2208.5), 0, { mask: 3 });
@@ -493,80 +494,150 @@ function placeHouseRooms({ G }) {
 // walk-in buildings around the square
 function placeTown({ G }, placeInteractiveDoor) {
   // 13. WALK-IN NEIGHBORHOOD BUILDINGS AROUND THE SQUARE
-  // 13a. Mrs. Miller's Cottage (№ 14 Maple Street, x: 198..262, z: 2196..2256)
-  placeInteractiveDoor({
-    id: 'miller_cottage',
-    kind: 'interior',
-    axis: 'z',
-    zw: 2196,
-    open0: 226,
-    y: ch1FloorY,
-    swingDir: -1,
-    startOpen: true,
-    name: 'Коттедж миссис Миллер (дом № 14)',
-  });
-  G.place('fireplace', m(201.8), ch1FloorY, m(2226), Math.PI / 2, { mask: 3 });
-  G.place('sofa', m(218), ch1FloorY, m(2226), -Math.PI / 2, { mask: 3 });
+  // 13a. Mrs. Miller's Cottage (№ 14 Maple Street — Garage, Corridor, Living, Kitchen, Bedroom, Toilet/Bath)
+  placeInteractiveDoor({ id: 'miller_cottage', kind: 'front', axis: 'z', zw: 2196, open0: 226, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Коттедж миссис Миллер (дом № 14)' });
+  placeInteractiveDoor({ id: 'miller_garage', kind: 'interior', axis: 'x', xw: 218, open0: 2208, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Гараж миссис Миллер' });
+  placeInteractiveDoor({ id: 'miller_toilet', kind: 'interior', axis: 'x', xw: 218, open0: 2247, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Ванная и туалет (дом № 14)' });
+  placeInteractiveDoor({ id: 'miller_bedroom', kind: 'interior', axis: 'z', zw: 2256, open0: 226, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Спальня миссис Миллер' });
+  placeInteractiveDoor({ id: 'miller_living', kind: 'interior', axis: 'x', xw: 244, open0: 2208, y: ch1FloorY, swingDir: 1, startOpen: true, name: 'Гостиная (дом № 14)' });
+  placeInteractiveDoor({ id: 'miller_kitchen', kind: 'interior', axis: 'x', xw: 244, open0: 2244, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Кухня (дом № 14)' });
+  placeInteractiveDoor({ id: 'miller_dining', kind: 'interior', axis: 'z', zw: 2240, open0: 260, y: ch1FloorY, swingDir: -1, startOpen: true, name: 'Проход на кухню (дом № 14)' });
+  // Miller Garage, Toilet/Bath, Corridor, Bedroom, Living, Kitchen props & per-room lighting
+  G.place('car_sedan', m(203), ch1FloorY, m(2219), -Math.PI / 2, { mask: 3 });
+  G.place('drawers', m(203), ch1FloorY, m(2242.5), Math.PI, { mask: 3 });
+  G.place('bathtub', m(212), ch1FloorY, m(2270), 0, { mask: 3 });
+  G.place('toilet', m(199), ch1FloorY, m(2275), Math.PI, { mask: 3 });
+  G.place('washbasin', m(205), ch1FloorY, m(2250), 0, { mask: 3 });
+  G.place('mirror_wall', m(220.2), ch1FloorY + 1.25, m(2230), Math.PI / 2, { mask: 3 });
+  G.place('bed', m(234), ch1FloorY, m(2270), -Math.PI / 2, { mask: 3 });
+  G.place('wardrobe', m(222.5), ch1FloorY, m(2268), Math.PI / 2, { mask: 3 });
   G.place('table', m(250), ch1FloorY, m(2226), 0, { mask: 3 });
   G.place('teapot', m(250.4), ch1FloorY + 0.64, m(2226), 0.2, { mask: 3, scale: 1.25 });
   G.place('teacup', m(249.5), ch1FloorY + 0.64, m(2226), -0.4, { mask: 3, scale: 1.3 });
-  G.place('wardrobe', m(248), ch1FloorY, m(2253), Math.PI, { mask: 3 });
-  G.light({ pos: [m(230), ch1FloorY + 3.2, m(2226)], r: 9.0, col: [1, 0.82, 0.55], k: 2.2, mask: 3 });
+  G.place('sofa', m(268), ch1FloorY, m(2210), 0, { mask: 3 });
+  G.place('fireplace', m(251), ch1FloorY, m(2236), Math.PI, { mask: 3 });
+  G.place('bookshelf', m(276), ch1FloorY, m(2236.5), Math.PI, { mask: 3 });
+  G.place('kitchen_counter', m(280), ch1FloorY, m(2270), -Math.PI / 2, { mask: 3 });
+  G.place('refrigerator', m(280), ch1FloorY, m(2250), -Math.PI / 2, { mask: 3 });
+  G.place('table', m(256), ch1FloorY, m(2264), 0, { mask: 3 });
+  G.place('chair', m(256), ch1FloorY, m(2271), Math.PI, { mask: 3 });
+  G.light({ pos: [m(231), ch1FloorY + 3.3, m(2224)], r: 7.5, col: [1, 0.84, 0.6], k: 2.0, mask: 3 });
+  G.light({ pos: [m(264), ch1FloorY + 3.3, m(2218)], r: 8.5, col: [1, 0.82, 0.56], k: 2.2, mask: 3 });
+  G.light({ pos: [m(264), ch1FloorY + 3.3, m(2260)], r: 8.0, col: [1, 0.85, 0.62], k: 2.1, mask: 3 });
+  G.light({ pos: [m(231), ch1FloorY + 3.3, m(2268)], r: 6.5, col: [1, 0.8, 0.55], k: 1.9, mask: 3 });
+  G.light({ pos: [m(206), ch1FloorY + 3.3, m(2263)], r: 6.5, col: [0.92, 0.96, 1.0], k: 1.9, mask: 3 });
+  G.light({ pos: [m(203), ch1FloorY + 3.3, m(2221)], r: 7.5, col: [0.92, 0.94, 0.98], k: 2.0, mask: 3 });
 
-  // 13b. Professor Wagner's Cartography Study (№ 18 Maple Street, x: 524..586, z: 2196..2256)
-  placeInteractiveDoor({
-    id: 'wagner_study',
-    kind: 'interior',
-    axis: 'z',
-    zw: 2196,
-    open0: 550,
-    y: ch1FloorY,
-    swingDir: -1,
-    startOpen: true,
-    name: 'Особняк профессора Вагнера (дом № 18)',
-  });
+  // 13b. Professor Wagner's 2-Story Brick Manor (№ 18 Maple Street — 1F + 2F + Garage)
+  placeInteractiveDoor({ id: 'wagner_study', kind: 'front', axis: 'z', zw: 2196, open0: 550, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Особняк профессора Вагнера (дом № 18)' });
+  placeInteractiveDoor({ id: 'wagner_garage', kind: 'interior', axis: 'x', xw: 570, open0: 2201, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Гараж профессора Вагнера' });
+  placeInteractiveDoor({ id: 'wagner_living', kind: 'interior', axis: 'z', zw: 2214, open0: 550, y: ch1FloorY, swingDir: -1, startOpen: true, name: 'Гостиная-кабинет (дом № 18)' });
+  placeInteractiveDoor({ id: 'wagner_kitchen', kind: 'interior', axis: 'z', zw: 2248, open0: 526, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Кухня (дом № 18)' });
+  placeInteractiveDoor({ id: 'wagner_toilet1', kind: 'interior', axis: 'z', zw: 2248, open0: 546, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Санузел 1-го этажа (дом № 18)' });
+  placeInteractiveDoor({ id: 'wagner_bedroom', kind: 'interior', axis: 'x', xw: 546, open0: 2228, y: ch1Floor2Y, swingDir: -1, startOpen: false, name: 'Спальня профессора (2-й этаж № 18)' });
+  placeInteractiveDoor({ id: 'wagner_bath2', kind: 'interior', axis: 'x', xw: 546, open0: 2258, y: ch1Floor2Y, swingDir: -1, startOpen: false, name: 'Ванная комната (2-й этаж № 18)' });
+  placeInteractiveDoor({ id: 'wagner_library', kind: 'interior', axis: 'z', zw: 2226, open0: 552, y: ch1Floor2Y, swingDir: 1, startOpen: false, name: 'Верхняя библиотека (2-й этаж № 18)' });
+  G.place('car_wagon', m(586), ch1FloorY, m(2224), -Math.PI / 2, { mask: 3 });
+  G.place('workbench', m(586), ch1FloorY, m(2256), Math.PI, { mask: 3 });
+  G.place('grandfather_clock', m(548), ch1FloorY, m(2200), 0, { mask: 3 });
   G.place('table', m(554), ch1FloorY, m(2226), 0, { mask: 3 });
   G.place('globe_stand', m(538), ch1FloorY, m(2226), 0.4, { mask: 3 });
-  G.place('bookshelf', m(583.2), ch1FloorY, m(2216), -Math.PI / 2, { mask: 3 });
-  G.place('bookshelf', m(583.2), ch1FloorY, m(2236), -Math.PI / 2, { mask: 3 });
-  G.place('fireplace', m(554), ch1FloorY, m(2252.2), Math.PI, { mask: 3 });
-  G.light({ pos: [m(554), ch1FloorY + 3.2, m(2226)], r: 9.0, col: [1, 0.8, 0.5], k: 2.2, mask: 3 });
+  G.place('sofa', m(528), ch1FloorY, m(2206), 0, { mask: 3 });
+  G.place('fireplace', m(519.2), ch1FloorY, m(2228), Math.PI / 2, { mask: 3 });
+  G.place('bookshelf', m(567.2), ch1FloorY, m(2234), -Math.PI / 2, { mask: 3 });
+  G.place('bookshelf', m(536), ch1FloorY, m(2245), Math.PI, { mask: 3 });
+  G.place('kitchen_counter', m(520), ch1FloorY, m(2270), Math.PI / 2, { mask: 3 });
+  G.place('refrigerator', m(520), ch1FloorY, m(2255), Math.PI / 2, { mask: 3 });
+  G.place('table', m(534), ch1FloorY, m(2268), 0, { mask: 3 });
+  G.place('chair', m(534), ch1FloorY, m(2261), 0, { mask: 3 });
+  G.place('toilet', m(550), ch1FloorY, m(2275), Math.PI, { mask: 3 });
+  G.place('washbasin', m(554), ch1FloorY, m(2262), -Math.PI / 2, { mask: 3 });
+  // Wagner 2nd floor furniture
+  G.place('bed', m(526), ch1Floor2Y, m(2220), Math.PI / 2, { mask: 3 });
+  G.place('drawers', m(521), ch1Floor2Y, m(2201), 0, { mask: 3 });
+  G.place('wardrobe', m(542), ch1Floor2Y, m(2208), -Math.PI / 2, { mask: 3 });
+  G.place('bookshelf', m(567), ch1Floor2Y, m(2212), -Math.PI / 2, { mask: 3 });
+  G.place('table', m(556), ch1Floor2Y, m(2206), 0, { mask: 3 });
+  G.place('chair', m(556), ch1Floor2Y, m(2212), Math.PI, { mask: 3 });
+  G.place('bathtub', m(521), ch1Floor2Y, m(2264), Math.PI / 2, { mask: 3 });
+  G.place('toilet', m(540), ch1Floor2Y, m(2275), Math.PI, { mask: 3 });
+  G.place('washbasin', m(530), ch1Floor2Y, m(2248), 0, { mask: 3 });
+  G.light({ pos: [m(556), ch1FloorY + 3.3, m(2205)], r: 7.5, col: [1, 0.84, 0.58], k: 2.0, mask: 3 });
+  G.light({ pos: [m(538), ch1FloorY + 3.3, m(2230)], r: 9.0, col: [1, 0.8, 0.52], k: 2.2, mask: 3 });
+  G.light({ pos: [m(528), ch1FloorY + 3.3, m(2264)], r: 7.5, col: [1, 0.84, 0.6], k: 2.0, mask: 3 });
+  G.light({ pos: [m(550), ch1FloorY + 3.3, m(2264)], r: 6.5, col: [0.92, 0.96, 1.0], k: 1.9, mask: 3 });
+  G.light({ pos: [m(586), ch1FloorY + 3.3, m(2228)], r: 8.0, col: [0.92, 0.94, 0.98], k: 2.0, mask: 3 });
+  G.light({ pos: [m(531), ch1Floor2Y + 2.8, m(2220)], r: 7.5, col: [1, 0.82, 0.56], k: 2.0, mask: 3 });
+  G.light({ pos: [m(558), ch1Floor2Y + 2.8, m(2210)], r: 7.0, col: [1, 0.82, 0.56], k: 2.0, mask: 3 });
+  G.light({ pos: [m(531), ch1Floor2Y + 2.8, m(2262)], r: 6.5, col: [0.92, 0.96, 1.0], k: 1.9, mask: 3 });
 
-  // 13c. Apothecary Stern's Pharmacy (№ 11 Maple Street, x: 210..270, z: 2052..2098)
-  placeInteractiveDoor({
-    id: 'apothecary_shop',
-    kind: 'interior',
-    axis: 'z',
-    zw: 2098,
-    open0: 236,
-    y: ch1FloorY,
-    swingDir: 1,
-    startOpen: true,
-    name: 'Городская аптека Штерна (дом № 11)',
-  });
-  G.place('apothecary_shelf', m(226), ch1FloorY, m(2055), 0, { mask: 3 });
-  G.place('apothecary_shelf', m(254), ch1FloorY, m(2055), 0, { mask: 3 });
+  // 13c. Apothecary Stern's Pharmacy & Attached Residence (№ 11 Maple Street)
+  placeInteractiveDoor({ id: 'apothecary_shop', kind: 'front', axis: 'z', zw: 2098, open0: 236, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Городская аптека Штерна (дом № 11)' });
+  placeInteractiveDoor({ id: 'apothecary_back_hall', kind: 'interior', axis: 'z', zw: 2052, open0: 236, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Жилая часть аптеки (коридор)' });
+  placeInteractiveDoor({ id: 'apothecary_garage', kind: 'interior', axis: 'x', xw: 210, open0: 2062, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Гараж при аптеке № 11' });
+  placeInteractiveDoor({ id: 'apothecary_living', kind: 'interior', axis: 'x', xw: 232, open0: 2038, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Гостиная (дом № 11)' });
+  placeInteractiveDoor({ id: 'apothecary_bedroom', kind: 'interior', axis: 'x', xw: 232, open0: 2018, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Спальня (дом № 11)' });
+  placeInteractiveDoor({ id: 'apothecary_kitchen', kind: 'interior', axis: 'x', xw: 248, open0: 2038, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Кухня (дом № 11)' });
+  placeInteractiveDoor({ id: 'apothecary_toilet', kind: 'interior', axis: 'x', xw: 248, open0: 2018, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Санузел (дом № 11)' });
+  G.place('car_sedan', m(198), ch1FloorY, m(2073), Math.PI / 2, { mask: 3 });
+  G.place('apothecary_shelf', m(224), ch1FloorY, m(2055), 0, { mask: 3 });
+  G.place('apothecary_shelf', m(256), ch1FloorY, m(2055), 0, { mask: 3 });
   G.place('table', m(240), ch1FloorY, m(2072), 0, { mask: 3 });
-  G.light({ pos: [m(240), ch1FloorY + 3.2, m(2075)], r: 9.0, col: [0.85, 0.96, 0.92], k: 2.2, mask: 3 });
+  G.place('sofa', m(214.5), ch1FloorY, m(2042), Math.PI / 2, { mask: 3 });
+  G.place('table', m(223), ch1FloorY, m(2042), Math.PI / 2, { mask: 3 });
+  G.place('bed', m(220), ch1FloorY, m(2021), Math.PI / 2, { mask: 3 });
+  G.place('drawers', m(220), ch1FloorY, m(2016), 0, { mask: 3 });
+  G.place('kitchen_counter', m(266), ch1FloorY, m(2043), -Math.PI / 2, { mask: 3 });
+  G.place('refrigerator', m(266), ch1FloorY, m(2036), -Math.PI / 2, { mask: 3 });
+  G.place('table', m(256), ch1FloorY, m(2042), 0, { mask: 3 });
+  G.place('toilet', m(265), ch1FloorY, m(2016), 0, { mask: 3 });
+  G.place('washbasin', m(258), ch1FloorY, m(2028), Math.PI, { mask: 3 });
+  G.light({ pos: [m(240), ch1FloorY + 3.3, m(2075)], r: 8.5, col: [0.85, 0.96, 0.92], k: 2.2, mask: 3 });
+  G.light({ pos: [m(240), ch1FloorY + 3.3, m(2032)], r: 6.5, col: [1, 0.85, 0.62], k: 1.9, mask: 3 });
+  G.light({ pos: [m(221), ch1FloorY + 3.3, m(2042)], r: 6.5, col: [1, 0.82, 0.56], k: 1.9, mask: 3 });
+  G.light({ pos: [m(221), ch1FloorY + 3.3, m(2022)], r: 6.5, col: [1, 0.8, 0.54], k: 1.9, mask: 3 });
+  G.light({ pos: [m(259), ch1FloorY + 3.3, m(2042)], r: 6.5, col: [1, 0.86, 0.64], k: 1.9, mask: 3 });
+  G.light({ pos: [m(259), ch1FloorY + 3.3, m(2022)], r: 6.0, col: [0.92, 0.96, 1.0], k: 1.8, mask: 3 });
+  G.light({ pos: [m(198), ch1FloorY + 3.3, m(2072)], r: 7.5, col: [0.92, 0.94, 0.98], k: 2.0, mask: 3 });
 
   // 13d. University Cartography Exhibition Hall (x: 448..512, z: 2052..2094)
-  placeInteractiveDoor({
-    id: 'uni_hall',
-    kind: 'interior',
-    axis: 'z',
-    zw: 2094,
-    open0: 476,
-    y: ch1FloorY,
-    swingDir: 1,
-    startOpen: true,
-    name: 'Выставочный павильон Университета',
-  });
+  placeInteractiveDoor({ id: 'uni_hall', kind: 'front', axis: 'z', zw: 2094, open0: 476, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Выставочный павильон Университета' });
   G.place('globe_stand', m(468), ch1FloorY, m(2072), 0.3, { mask: 3 });
   G.place('table', m(484), ch1FloorY, m(2072), 0, { mask: 3 });
   G.place('bookshelf', m(509.2), ch1FloorY, m(2064), -Math.PI / 2, { mask: 3 });
   G.place('bookshelf', m(509.2), ch1FloorY, m(2080), -Math.PI / 2, { mask: 3 });
-  G.light({ pos: [m(480), ch1FloorY + 3.2, m(2072)], r: 9.5, col: [1, 0.86, 0.62], k: 2.2, mask: 3 });
+  G.light({ pos: [m(480), ch1FloorY + 3.3, m(2072)], r: 9.5, col: [1, 0.86, 0.62], k: 2.2, mask: 3 });
 
+  // 13e. Corner Bookshop & Photo Studio Residence (№ 15 Maple Street)
+  placeInteractiveDoor({ id: 'bookshop_studio', kind: 'front', axis: 'z', zw: 2098, open0: 550, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Книжная лавка и фотоателье (дом № 15)' });
+  placeInteractiveDoor({ id: 'bookshop_back_hall', kind: 'interior', axis: 'z', zw: 2052, open0: 550, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Жилая часть книжной лавки (коридор)' });
+  placeInteractiveDoor({ id: 'bookshop_garage', kind: 'interior', axis: 'x', xw: 584, open0: 2056, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Гараж при доме № 15' });
+  placeInteractiveDoor({ id: 'bookshop_living', kind: 'interior', axis: 'x', xw: 546, open0: 2038, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Гостиная (дом № 15)' });
+  placeInteractiveDoor({ id: 'bookshop_bedroom', kind: 'interior', axis: 'x', xw: 546, open0: 2018, y: ch1FloorY, swingDir: -1, startOpen: false, name: 'Спальня (дом № 15)' });
+  placeInteractiveDoor({ id: 'bookshop_kitchen', kind: 'interior', axis: 'x', xw: 562, open0: 2038, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Кухня (дом № 15)' });
+  placeInteractiveDoor({ id: 'bookshop_toilet', kind: 'interior', axis: 'x', xw: 562, open0: 2018, y: ch1FloorY, swingDir: 1, startOpen: false, name: 'Санузел (дом № 15)' });
+  G.place('car_wagon', m(597), ch1FloorY, m(2073), Math.PI / 2, { mask: 3 });
+  G.place('bookshelf', m(538), ch1FloorY, m(2055), 0, { mask: 3 });
+  G.place('bookshelf', m(570), ch1FloorY, m(2055), 0, { mask: 3 });
+  G.place('bookshelf', m(581.2), ch1FloorY, m(2074), -Math.PI / 2, { mask: 3 });
+  G.place('table', m(554), ch1FloorY, m(2074), 0, { mask: 3 });
+  G.place('photo_enlarger', m(554), ch1FloorY + 0.64, m(2074), 0, { mask: 3 });
+  G.place('sofa', m(530.5), ch1FloorY, m(2042), Math.PI / 2, { mask: 3 });
+  G.place('table', m(538), ch1FloorY, m(2042), Math.PI / 2, { mask: 3 });
+  G.place('bed', m(535), ch1FloorY, m(2021), Math.PI / 2, { mask: 3 });
+  G.place('drawers', m(535), ch1FloorY, m(2016), 0, { mask: 3 });
+  G.place('kitchen_counter', m(580), ch1FloorY, m(2043), -Math.PI / 2, { mask: 3 });
+  G.place('refrigerator', m(580), ch1FloorY, m(2036), -Math.PI / 2, { mask: 3 });
+  G.place('table', m(570), ch1FloorY, m(2042), 0, { mask: 3 });
+  G.place('toilet', m(579), ch1FloorY, m(2016), 0, { mask: 3 });
+  G.place('washbasin', m(572), ch1FloorY, m(2028), Math.PI, { mask: 3 });
+  G.light({ pos: [m(554), ch1FloorY + 3.3, m(2074)], r: 8.5, col: [1, 0.82, 0.55], k: 2.2, mask: 3 });
+  G.light({ pos: [m(554), ch1FloorY + 3.3, m(2032)], r: 6.5, col: [1, 0.85, 0.62], k: 1.9, mask: 3 });
+  G.light({ pos: [m(536), ch1FloorY + 3.3, m(2042)], r: 6.5, col: [1, 0.82, 0.56], k: 1.9, mask: 3 });
+  G.light({ pos: [m(536), ch1FloorY + 3.3, m(2022)], r: 6.5, col: [1, 0.8, 0.54], k: 1.9, mask: 3 });
+  G.light({ pos: [m(572), ch1FloorY + 3.3, m(2042)], r: 6.5, col: [1, 0.86, 0.64], k: 1.9, mask: 3 });
+  G.light({ pos: [m(572), ch1FloorY + 3.3, m(2022)], r: 6.0, col: [0.92, 0.96, 1.0], k: 1.8, mask: 3 });
+  G.light({ pos: [m(597), ch1FloorY + 3.3, m(2072)], r: 7.5, col: [0.92, 0.94, 0.98], k: 2.0, mask: 3 });
 }
 
 // the mandatory clues of the chapter: desk, mirror, calendar, dresser, nightstand
@@ -680,7 +751,7 @@ function clueInteractions({ G, adapt, addClue, night, say, voice }, { ch1MirrorP
 
   // 5. Nightstand in 2nd-Floor Master Bedroom: Sedative Bottle
   G.interact({
-    pos: [m(481.6), ch1Floor2Y + 0.88, m(2202)], r: 1.85, world: 'any',
+    pos: [m(481.6), ch1Floor2Y + 0.88, m(2200)], r: 1.85, world: 'any',
     label: 'Прикроватная тумбочка у кровати (2-й этаж): осмотреть пузырёк с седативным',
     icon: 'hand', prop: ch1SedativeProp,
     cond: () => G.chapter === 1 && !G.has('sedative_bottle'),
@@ -762,7 +833,7 @@ function roomInteractions({ G, addClue, night, say }, { ch1Cup }) {
 
   // 6c-4. Living Room Brick Fireplace
   G.interact({
-    pos: [m(481), ch1FloorY + 1.0, m(2224)], r: 2.5, world: 'any',
+    pos: [m(481), ch1FloorY + 1.0, m(2220)], r: 2.5, world: 'any',
     label: () => (night() ? 'Камин в гостиной: вглядеться в обугленные поленья' : 'Камин в гостиной: тлеющие дрова и резная полка'),
     icon: 'eye',
     cond: () => G.chapter === 1,
@@ -838,6 +909,8 @@ function yardInteractions({ G, addClue, night, say }, { ch1ClockProp, ch1FridgeP
   });
 
   // 6h. Grandfather Clock in 1st-Floor Hallway: Stopped at 01:17 AM
+  let ch1ClockDayRead = false;
+  let ch1ClockNightRead = false;
   G.interact({
     pos: [m(418), ch1FloorY + 1.1, m(2197)], r: 2.3, world: 'any',
     label: () => (night() ? 'Напольные часы: вглядеться в застывший маятник (01:17)' : 'Напольные часы у стены прихожей: проверить время и механизм'),
@@ -847,9 +920,19 @@ function yardInteractions({ G, addClue, night, say }, { ch1ClockProp, ch1FridgeP
       G.audio.sfx('tick');
       addClue('c1_clock');
       if (!night()) {
-        say('Старинные дубовые часы деда стоят у северной стены прихожей. Латунный маятник неподвижен, а стрелки замерли ровно на 01:17 ночи. Странно, почему они остановились, если сейчас солнечное утро понедельника?..', 4.5);
+        if (!ch1ClockDayRead) {
+          ch1ClockDayRead = true;
+          say('Старинные дубовые часы деда стоят у северной стены прихожей. Латунный маятник неподвижен, а стрелки замерли ровно на 01:17 ночи. Странно, почему они остановились, если сейчас солнечное утро понедельника?..', 4.5);
+        } else {
+          say('Часы замерли ровно на 01:17 ночи.', 2.2);
+        }
       } else {
-        say('В глубине застекленного корпуса вместо тиканья слышен глухой скрежет металла и плеск ледяной воды. 01:17 ночи — точное время, когда наш универсал сорвался с мокрого карниза над рекой!', 4.8);
+        if (!ch1ClockNightRead) {
+          ch1ClockNightRead = true;
+          say('В глубине застекленного корпуса вместо тиканья слышен глухой скрежет металла и плеск ледяной воды. 01:17 ночи — точное время, когда наш универсал сорвался с мокрого карниза над рекой!', 4.8);
+        } else {
+          say('01:17 ночи — время падения с карниза.', 2.4);
+        }
       }
     },
   });

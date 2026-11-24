@@ -4,6 +4,8 @@ import { vnoise3 } from '../engine/noise.js';
 import { WX, WY, WZ, VS } from '../world/layout.js';
 import { matFlags, F_SOLID, F_HAZARD, F_WATER, notGround } from '../world/materials.js';
 
+const _FLICKER_OPTS = { speed: 60, quiet: true };
+
 export class Duality {
   constructor() {
     this.base = 0;
@@ -84,7 +86,7 @@ export class Duality {
       this.flickerNext -= dt;
       if (this.flickerNext <= 0) {
         this.flickerNext = 0.6 + Math.random() * 2.6;
-        this.flip(this.target ? 0 : 1, playerPos, { speed: 60, quiet: true });
+        this.flip(this.target ? 0 : 1, playerPos, _FLICKER_OPTS);
       }
       if (this.flicker <= 0) { if (this.baseNight) this.flip(1, playerPos); else this.toDream(playerPos); }
     }
@@ -160,6 +162,12 @@ export class VoxelWorld {
   solidM(x, y, z, w) { return this.solid(Math.floor(x / VS), Math.floor(y / VS), Math.floor(z / VS), w); }
   hazardM(x, y, z, w) { const m = this.mat(Math.floor(x / VS), Math.floor(y / VS), Math.floor(z / VS), w); return (matFlags[m] & F_HAZARD) !== 0; }
   waterM(x, y, z) { return (matFlags[this.mat(Math.floor(x / VS), Math.floor(y / VS), Math.floor(z / VS), 0)] & F_WATER) !== 0; }
+  _hasHeadroom(vx, y, vz, w, hV) {
+    for (let dy = 0; dy < hV; dy++) {
+      if (this.solid(vx, y + dy, vz, w)) return false;
+    }
+    return true;
+  }
   // every height (meters) where a person can stand on real ground: solid, non-foliage,
   // non-roof support below and ~2 m of free air above
   standLevels(x, z, w) {
@@ -167,11 +175,7 @@ export class VoxelWorld {
     const hV = Math.ceil(2.0 / VS); // clearance for ~2.0m character height
     for (let y = 1; y < WY - hV; y++) {
       if (!this.solid(vx, y - 1, vz, w) || notGround[this.mat(vx, y - 1, vz, w)]) continue;
-      let blocked = false;
-      for (let dy = 0; dy < hV; dy++) {
-        if (this.solid(vx, y + dy, vz, w)) { blocked = true; break; }
-      }
-      if (blocked) continue;
+      if (!this._hasHeadroom(vx, y, vz, w, hV)) continue;
       if (matFlags[this.mat(vx, y, vz, w)] & F_HAZARD) continue;
       out.push(y * VS);
     }
@@ -185,11 +189,7 @@ export class VoxelWorld {
     let bestDist = 1e9;
     for (let y = 1; y < WY - hV; y++) {
       if (!this.solid(vx, y - 1, vz, w) || notGround[this.mat(vx, y - 1, vz, w)]) continue;
-      let blocked = false;
-      for (let dy = 0; dy < hV; dy++) {
-        if (this.solid(vx, y + dy, vz, w)) { blocked = true; break; }
-      }
-      if (blocked) continue;
+      if (!this._hasHeadroom(vx, y, vz, w, hV)) continue;
       if (matFlags[this.mat(vx, y, vz, w)] & F_HAZARD) continue;
       const yM = y * VS;
       if (hint === undefined || hint === null) return yM;
@@ -206,13 +206,7 @@ export class VoxelWorld {
     const vx = Math.floor(x / VS), vz = Math.floor(z / VS);
     const hV = Math.ceil(2.0 / VS);
     for (let y = 1; y < WY - hV; y++) {
-      if (this.solid(vx, y - 1, vz, w)) {
-        let blocked = false;
-        for (let dy = 0; dy < hV; dy++) {
-          if (this.solid(vx, y + dy, vz, w)) { blocked = true; break; }
-        }
-        if (!blocked) return y * VS;
-      }
+      if (this.solid(vx, y - 1, vz, w) && this._hasHeadroom(vx, y, vz, w, hV)) return y * VS;
     }
     return this.groundM(x, z, w);
   }

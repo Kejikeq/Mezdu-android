@@ -161,6 +161,32 @@ export function m34Point(m, x, y, z, out = _ptScratch) {
   return out;
 }
 
+// Compose T(pos) * R(align local +Y to (dx,dy,dz)) * S(scale) — right-handed orthonormal basis, zero allocations.
+export function m34AlignY(o, px, py, pz, dx, dy, dz, s = 1) {
+  const len = Math.hypot(dx, dy, dz);
+  let ux = 0, uy = 1, uz = 0;
+  if (len > 1e-6) {
+    const inv = 1 / len;
+    ux = dx * inv; uy = dy * inv; uz = dz * inv;
+  }
+  // Use world +Y as roll reference unless shaft is nearly vertical, preventing sudden twist flips
+  const nearVert = Math.abs(uy) > 0.96;
+  const rx = 0, ry = nearVert ? 0 : 1, rz = nearVert ? 1 : 0;
+  // xAxis = normalize(u x ref), zAxis = xAxis x u => right-handed det = +1
+  let xx = uy * rz - uz * ry;
+  let xy = uz * rx - ux * rz;
+  let xz = ux * ry - uy * rx;
+  const xl = Math.hypot(xx, xy, xz) || 1;
+  xx /= xl; xy /= xl; xz /= xl;
+  const zx = xy * uz - xz * uy;
+  const zy = xz * ux - xx * uz;
+  const zz = xx * uy - xy * ux;
+  o[0] = xx * s; o[1] = ux * s; o[2] = zx * s; o[3] = px;
+  o[4] = xy * s; o[5] = uy * s; o[6] = zy * s; o[7] = py;
+  o[8] = xz * s; o[9] = uz * s; o[10] = zz * s; o[11] = pz;
+  return o;
+}
+
 export const angleLerp = (a, b, t) => {
   let d = ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
   return a + d * t;

@@ -6,23 +6,24 @@ export function setupChapter2(ctx) {
   const { G, adapt, addClue, gD, registerChapterExit, say } = ctx;
   const CH2_B = P.ch2Lab;
   const ch2FloorY = 7.5;
-  const ch2DoorX = m(CH2_B.door + 1), ch2DoorZ = m(CH2_B.z0);
+  const ch2ArchY = 7.0;
+  const ch2DoorX = m(CH2_B.door + 4), ch2DoorZ = m(CH2_B.z0);
   // Red darkroom light inside + warm courtyard lantern outside
   G.light({ pos: [m(400), 9.2, m(1920)], r: 10, col: [1.0, 0.12, 0.08], k: 2.8, mask: 3, flicker: true });
-  G.place('lantern_post', m(400), gD(m(400), m(1884)), m(1884), 0, { mask: 3 });
-  G.light({ pos: [m(400), gD(m(400), m(1884)) + 2.2, m(1884)], r: 7.5, col: [1, 0.76, 0.44], k: 2.0, mask: 3 });
-  // Archive cabinet by courtyard entrance + Darkroom tables inside
-  G.place('drawers', m(395), gD(m(395), m(1903)), m(1903), 0, { mask: 3 });
-  const ch2KeyProp = G.place('item_rusty_key', m(395), gD(m(395), m(1903)) + 0.88, m(1903), 0.5, { mask: 3, scale: 2.4, highlight: true });
+  G.place('lantern_post', m(400), ch2ArchY, m(1880), 0, { mask: 3 });
+  G.light({ pos: [m(400), ch2ArchY + 2.2, m(1880)], r: 7.5, col: [1, 0.76, 0.44], k: 2.0, mask: 3 });
+  // Archive cabinet under courtyard entrance canopy (x: 376..424, z: 1872..1888) + Darkroom tables & shelves inside
+  G.place('drawers', m(386), ch2ArchY, m(1884), 0, { mask: 3 });
+  const ch2KeyProp = G.place('item_rusty_key', m(386), ch2ArchY + 0.88, m(1884), 0.5, { mask: 3, scale: 2.4, highlight: true });
   G.place('table', m(400), ch2FloorY, m(1922), 0, { mask: 3 });
-  G.place('bookshelf', m(392.5), ch2FloorY, m(1920), Math.PI / 2, { mask: 3 });
-  G.place('bookshelf', m(407.5), ch2FloorY, m(1920), -Math.PI / 2, { mask: 3 });
+  G.place('bookshelf', m(374.8), ch2FloorY, m(1920), Math.PI / 2, { mask: 3 });
+  G.place('bookshelf', m(425.2), ch2FloorY, m(1920), -Math.PI / 2, { mask: 3 });
   const ch2PhotoProp = G.place('item_photo_2', m(400), ch2FloorY + 0.65, m(1922), 0.1, { mask: 3, scale: 2.3, pitch: -Math.PI / 2, highlight: true });
   const ch2DoorOpenProp = G.place('door_open', ch2DoorX - 0.5, ch2FloorY, ch2DoorZ - 0.25, Math.PI / 2, { mask: 3, visible: false });
 
   // Mandatory 2A: Archive cabinet & route logbook outside the darkroom
   G.interact({
-    pos: [m(395), gD(m(395), m(1903)) + 0.8, m(1903)], r: 2.3, world: 'any',
+    pos: [m(386), ch2ArchY + 0.8, m(1884)], r: 2.3, world: 'any',
     label: 'Картотека архива: забрать ключ от проявочной и сверить журнал',
     icon: 'key', prop: ch2KeyProp,
     cond: () => G.chapter === 2 && !G.has('darkroom_key'),
@@ -88,7 +89,7 @@ export function setupChapter2(ctx) {
 
   // Optional Clues 2C & 2D inside the Darkroom
   G.interact({
-    pos: [m(393), ch2FloorY + 0.8, m(1920)], r: 2.1, world: 'any',
+    pos: [m(375.5), ch2FloorY + 0.8, m(1920)], r: 2.1, world: 'any',
     label: 'Полка: осмотреть треснувший светофильтр (опц.)',
     icon: 'eye',
     cond: () => G.chapter === 2 && !G.memoryBoard.hasClue('c2_broken_lens'),
@@ -98,7 +99,7 @@ export function setupChapter2(ctx) {
     },
   });
   G.interact({
-    pos: [m(407), ch2FloorY + 0.8, m(1920)], r: 2.1, world: 'any',
+    pos: [m(424.5), ch2FloorY + 0.8, m(1920)], r: 2.1, world: 'any',
     label: 'Стенд: проверить штормовой барометр (опц.)',
     icon: 'eye',
     cond: () => G.chapter === 2 && !G.memoryBoard.hasClue('c2_barometer'),

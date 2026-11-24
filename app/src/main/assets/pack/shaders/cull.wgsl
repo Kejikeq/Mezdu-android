@@ -41,7 +41,7 @@ struct RigPose {
   seatId: u32, // 0:none, 1:ground, 2:bench, 3:sofa
   slot: u32,
   models: vec4u, // x: torso, y: head, z: uarm, w: uarmL
-  models2: vec4u, // x: farm, y: farmL, z: leg
+  models2: vec4u, // x: farm, y: farmL, z: leg, w: body (unified skinned mesh)
   _pad: vec3u,
 };
 struct Particle { p: vec4f, v: vec4f, c: vec4f };
@@ -74,8 +74,11 @@ fn rangedIndex(g: u32) -> u32 {
   if (U.count.y == 1u && (inst.mask & 4u) == 0u) { return; }
   if ((inst.mask & U.count.w) == 0u) { return; }
   let mi = minfo[inst.model];
+  let isSkinned = (mi.flags & 8192u) != 0u;
   let p = vec3f(inst.m0.w, inst.m1.w, inst.m2.w);
-  let r = mi.rad.x * length(inst.m0.xyz);
+  let cullP = select(p, p + vec3f(0.0, 0.9, 0.0), isSkinned);
+  let baseR = mi.rad.x * length(inst.m0.xyz);
+  let r = select(baseR, max(baseR, 2.5), isSkinned);
   // mixed frame: an instance clearly inside one world (away from the wave fronts and bubble edges)
   // is drawn only in that world's version; near a front both versions stay for the per-pixel test
   if (U.count.w == 3u && (inst.mask & 3u) != 3u) {
@@ -94,22 +97,24 @@ fn rangedIndex(g: u32) -> u32 {
     }
     if (!unsure && (inst.mask & select(1u, 2u, w > 0.5)) == 0u) { return; }
   }
-  let d = distance(p, U.cam.xyz);
+  let d = distance(cullP, U.cam.xyz);
   // Fog-aware impostor & distance culling:
   // Key story entities (deer, figures, rabbit, rigs) with mi.rad.y > 55m stay visible up to mi.rad.y
   if (d - r > max(55.0, mi.rad.y)) { return; }
   let lod = (mi.flags & 2u) != 0u; // 2u = far / low-poly / impostor model
   let dl = max(d - r * 0.8, 0.0);
-  // Near high-poly models (lod == false) are culled at d > max(32.0, mi.rad.y)
-  if (!lod && d > max(32.0, mi.rad.y)) { return; }
+  // Near high-poly models (lod == false) are culled at d - r > max(32.0, mi.rad.y)
+  if (!lod && d - r > max(32.0, mi.rad.y)) { return; }
   // two preset multipliers: cam.w scales the draw distance, nb.z (f32 bits) scales the switches
-  // between detail levels; 1024u = a farther level exists, so this model's far end is a switch
+  // between detail levels; 1024u = a farther detail level exists, so this model's far end is a switch
   let kl = bitcast<f32>(U.nb.z);
   if (select(d - r, dl, lod) > mi.rad.y * select(U.cam.w, kl, (mi.flags & 1024u) != 0u)) { return; }
   if (lod && dl < mi.rad.z * kl) { return; }
-  for (var k = 0; k < 6; k++) {
-    let pl = U.planes[k];
-    if (dot(pl.xyz, p) + pl.w < -r) { return; }
+  if (!(isSkinned && d < 8.0)) {
+    for (var k = 0; k < 6; k++) {
+      let pl = U.planes[k];
+      if (dot(pl.xyz, cullP) + pl.w < -r) { return; }
+    }
   }
   let slot = atomicAdd(&args[inst.model].instanceCount, 1u);
   // never past the model's own share of the list (rad.w = capacity): an extra instance would be drawn by the next model
